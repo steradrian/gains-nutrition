@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+> **Upgrade note.** Accounts that aren't admins can no longer point Mealie, CookTrace or push notifications (Gotify, ntfy, Apprise) at an address on your own network. Admins and single-user installs are unaffected. If other people on your instance use a Mealie or push server at home, set `ALLOW_PRIVATE_SERVICE_URLS=1`. Behind a reverse proxy, set `TRUST_PROXY` too.
+
+### Security
+
+- **Home services are an admin's by default.** Any signed-in account could save a "Mealie", "CookTrace" or push address on the server's network (`127.0.0.1`, the router, another container) and have the server fetch it. This covers the proxies, the push test, background pushes and image imports from those services. `ALLOW_PRIVATE_SERVICE_URLS=1` opens it to everyone again.
+- **`TRUST_PROXY`.** Behind a reverse proxy every visitor looked like the proxy, so one person guessing passwords locked everyone out of sign-in. With `TRUST_PROXY` set, each visitor is counted separately.
+
 ---
 
 ## [1.4.0] - 2026-10-09

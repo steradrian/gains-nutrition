@@ -4,13 +4,15 @@ import { requireAuth, userMgmtActive } from '../middleware/auth.js';
 import db from '../db.js';
 import { fetchChecked, serviceBase, readBody } from '../lib/ssrf-guard.js';
 import { apiPathFor, MEALIE_API } from '../lib/service-paths.js';
+import { homeServiceAllowed, SERVICE_OPT_IN } from '../lib/outbound-policy.js';
 
 const router = Router();
 router.use(requireAuth);
 
-// Mealie usually lives on the home network, so that's allowed for every
-// account, but only for the parts of its API this app reads, with GET, and
-// no redirect to another server (the request carries the account's token).
+// Mealie usually lives on the home network, so that's allowed for an admin
+// (and other accounts when the owner opts them in, lib/outbound-policy.js),
+// but only for the parts of its API this app reads, with GET, and no
+// redirect to another server (the request carries the account's token).
 const _apiPath = path => apiPathFor(MEALIE_API, path);
 
 function _normalizeUrl(s) {
@@ -72,7 +74,7 @@ router.post('/proxy', wrap(async (req, res) => {
     const response = await fetchChecked(url, {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
-    }, { allowPrivate: true, sameOrigin: true, maxRedirects: 3 });
+    }, { allowPrivate: homeServiceAllowed(req.user?.id), allowPrivateEnvHint: SERVICE_OPT_IN, sameOrigin: true, maxRedirects: 3 });
     clearTimeout(timer);
     if (!response.ok) {
       return res.status(response.status).json({ error: `Mealie returned ${response.status}` });
@@ -80,7 +82,7 @@ router.post('/proxy', wrap(async (req, res) => {
     res.json(JSON.parse((await readBody(response, 5 * 1024 * 1024)).toString('utf8')));
   } catch(e) {
     clearTimeout(timer);
-    const refused = /addresses are not allowed/.test(e?.message || '');
+    const refused = /addresses are (not allowed|blocked)/.test(e?.message || '');
     res.status(503).json({ error: refused ? e.message : 'Could not reach Mealie' });
   }
 }));
