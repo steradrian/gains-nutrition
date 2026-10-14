@@ -155,7 +155,9 @@ test('body-stats polling runs its keyset and LIMIT in SQL on idx_diary_user_chan
   assert.doesNotMatch(plan, /TEMP B-TREE/, 'no sort: the index gives the order');
   const countSql = seen.find(s => /COUNT\(\*\)/.test(s) && /FROM diary/.test(s));
   const countPlan = db.prepare(`EXPLAIN QUERY PLAN ${countSql}`).all(user.id, 'x', 'x', '').map(r => r.detail).join(' | ');
-  assert.match(countPlan, /COVERING INDEX idx_diary_user_changed/, countPlan);
+  // A range from the cursor on the same index. (Newer SQLite calls it a
+  // covering index; the one better-sqlite3 bundles reads the row too.)
+  assert.match(countPlan, /USING (COVERING )?INDEX idx_diary_user_changed \(user_id=\? AND <expr>>\?\)/, countPlan);
 
   // Paging through gives every day once, in change order.
   const dates = first.body.items.map(i => i.date);

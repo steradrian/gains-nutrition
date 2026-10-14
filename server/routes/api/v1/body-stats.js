@@ -135,7 +135,7 @@ router.get('/', requireScope('read:body-stats'), wrap((req, res) => {
   // idx_diary_user_changed (user_id, datetime(updated_at), date), so a poll
   // reads one page, not the user's whole diary. The plain lower bound lets
   // SQLite start the index range at the cursor; the row value is the exact
-  // position. total (what is left from here) is counted on the index alone.
+  // position. total (what is left from here) is counted over the same range.
   where.push('datetime(updated_at) >= ?', '(datetime(updated_at), date) > (?, ?)');
   params.push(position.u, position.u, position.d);
   const total = db.prepare(`SELECT COUNT(*) AS n FROM diary WHERE ${where.join(' AND ')}`).get(...params).n;
