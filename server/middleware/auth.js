@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import db from '../db.js';
 import { logger } from '../logger.js';
-import { hubBearer, hubConfig, hubMode } from '../lib/hub-auth.js';
+import { headerCarriesHubToken, hubBearer, hubConfig, hubMode } from '../lib/hub-auth.js';
 
 // A broken HUB_JWKS / HUB_ISSUER must stop the server, not quietly turn the
 // hub's path off (the hub's requests would then be anonymous).
@@ -78,18 +78,28 @@ function _ourBearer(token) {
 
 const _isApiV1 = path => path === '/api/v1' || path.startsWith('/api/v1/');
 
+/** The credential of an `Authorization: Bearer <token>` header, or null.
+ *  The scheme is case-insensitive (RFC 7235): `bearer <hub token>` must
+ *  reach the hub check rather than slip past it to the cookie. */
+export function bearerToken(header) {
+  const m = typeof header === 'string' ? header.match(/^Bearer[ \t]+(\S+)[ \t]*$/i) : null;
+  return m ? m[1] : null;
+}
+
 /** Attach req.user from a hub token, our bearer token or the session cookie
  *  (non-blocking, except that a bad hub token is refused).
  *  req.authVia says which one decided: 'hub', 'bearer', 'cookie' or null. */
 export function authenticate(req, res, next) {
   const auth = req.headers.authorization;
-  const bearer = auth?.startsWith('Bearer ') ? auth.slice(7) : null;
+  // Without a hub, the header is read exactly as upstream does.
+  const bearer = hubMode() ? bearerToken(auth) : (auth?.startsWith('Bearer ') ? auth.slice(7) : null);
 
   // A hub token (HUB_JWKS) decides before anything else, and a bad one is a
   // 401, never a fall-through to the cookie. scope=user acts as that person
   // on our own routes; scope=sync reaches /api/v1 only, where bearerAuth
   // turns it into the sync scopes (req.hub).
-  const hub = hubBearer(bearer);
+  let hub = hubBearer(bearer);
+  if (hub.kind === 'none' && headerCarriesHubToken(auth)) hub = { kind: 'invalid', reason: 'header' };
   if (hub.kind === 'invalid') {
     logger.warn(`[auth] refused a hub token (${hub.reason}) on ${req.method} ${req.path}`);
     return res.status(401).json({ error: 'Invalid hub token', code: 'hub_token_invalid' });

@@ -9,9 +9,9 @@ import { wrap } from '../logger.js';
 import { logger } from '../logger.js';
 import { signToken, sessionMaxAge, requireAuth, userMgmtActive } from '../middleware/auth.js';
 import { claimAnonymousData } from '../lib/claim-anonymous-data.js';
-import { hubMode } from '../lib/hub-auth.js';
+import { hubMode, isHubManaged } from '../lib/hub-auth.js';
 import {
-  listProviders, publicProvider, getProvider, getClient,
+  HUB_MANAGED_LINK_ERROR, listProviders, publicProvider, getProvider, getClient,
   generateAuthChecks, persistState, consumeState,
   resolveUser, applyAdminMapping, linkUser, unlinkUser, listUserLinks,
   isPasswordLoginEnabled, isValidAppChallenge, persistHandoff, consumeHandoff,
@@ -28,6 +28,23 @@ const COOKIE_OPTS = {
   secure:   !_insecureCookies,
 };
 const LOGOUT_COOKIE = 'nt_oidc_logout';
+
+/**
+ * First-user bootstrap for a resolveUser() result: claim orphaned data
+ * (mirrors password /register) and make the account admin. Shares one
+ * helper with the password path so the two cannot drift — an OIDC-first
+ * instance has exactly the same single-user data to adopt.
+ * Never behind a hub, where nobody becomes admin by arriving first.
+ */
+export function bootstrapFirstOidcUser(result) {
+  if (hubMode() || !result.created) return false;
+  if (db.prepare(`SELECT COUNT(*) AS n FROM users`).get().n !== 1) return false;
+  claimAnonymousData(result.user.id);
+  db.prepare(`UPDATE users SET role = 'admin' WHERE id = ?`).run(result.user.id);
+  result.user.role = 'admin';
+  logger.info(`[oidc] first-user OIDC bootstrap: ${result.user.username} → admin`);
+  return true;
+}
 
 /** Choose a redirect URI for this provider that matches one of the configured ones. */
 function _resolveRedirectUri(provider, req) {
@@ -77,6 +94,8 @@ router.get('/login/:providerId', wrap(async (req, res) => {
 
   const checks = generateAuthChecks();
   const linkMode = req.query.link === '1' && !!req.user;
+  // linkUser() refuses this in the callback too; stopping here spares the IdP round trip.
+  if (linkMode && isHubManaged(req.user.id)) return res.status(403).send(HUB_MANAGED_LINK_ERROR);
   const isMobile = req.query.mobile === '1';
   // Newer Android builds send app_challenge so the deep link at the end can
   // carry a single-use code instead of the session token (see /handoff).
@@ -180,17 +199,7 @@ async function handleCallback(req, res) {
     return _redirectToLogin(res, stored.returnPath, msg);
   }
   applyAdminMapping(provider, result.user, claims);
-
-  // First-user bootstrap: claim orphaned data (mirrors password /register).
-  // Shares one helper with the password path so the two cannot drift — an
-  // OIDC-first instance has exactly the same single-user data to adopt.
-  // Never behind a hub, where nobody becomes admin by arriving first.
-  if (!hubMode() && result.created && db.prepare(`SELECT COUNT(*) AS n FROM users`).get().n === 1) {
-    claimAnonymousData(result.user.id);
-    db.prepare(`UPDATE users SET role = 'admin' WHERE id = ?`).run(result.user.id);
-    result.user.role = 'admin';
-    logger.info(`[oidc] first-user OIDC bootstrap: ${result.user.username} → admin`);
-  }
+  bootstrapFirstOidcUser(result);
 
   // Mint identical nt_token to password path
   const token = signToken(result.user);

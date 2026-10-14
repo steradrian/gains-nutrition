@@ -22,6 +22,12 @@
  * People are mapped by (issuer, sub) in user_hub_links. A first request
  * creates the account: role 'user', a made-up username, no password. The
  * role always comes from the users row, never from the token.
+ *
+ * While the hub is on, a hub account gets no lasting credential of its own
+ * from a request (no first password, no OIDC link), so a leaked token is
+ * worth its 60 s. The exception is an admin's: an admin can make accounts
+ * and API tokens, so a leaked admin hub token is as bad as a leaked admin
+ * password. Keep admin accounts few.
  */
 import crypto from 'crypto';
 import db from '../db.js';
@@ -152,8 +158,10 @@ const _findLinked = (issuer, sub) => db.prepare(
 /**
  * The NutriTrace account for a hub user, made on first sight.
  * Returns { id, username, full_name, role } as stored in the database.
+ * IMMEDIATE takes the write lock before the lookup, so a second process
+ * (the link script) cannot slip a link in between the read and the insert.
  */
-export const resolveHubUser = db.transaction((issuer, { sub, name }) => {
+const _resolveHubUser = db.transaction((issuer, { sub, name }) => {
   const linked = _findLinked(issuer, sub);
   if (linked) return linked;
   const fullName = typeof name === 'string' && name.trim() ? name.trim().slice(0, 100) : null;
@@ -163,6 +171,17 @@ export const resolveHubUser = db.transaction((issuer, { sub, name }) => {
   db.prepare('INSERT INTO user_hub_links (user_id, issuer, sub) VALUES (?, ?, ?)').run(r.lastInsertRowid, issuer, sub);
   return _findLinked(issuer, sub);
 });
+// Known people (every request but their first) are a plain read, no lock.
+export const resolveHubUser = (issuer, claims) =>
+  _findLinked(issuer, claims.sub) ?? _resolveHubUser.immediate(issuer, claims);
+
+/** True when the hub is on and the account is reached through it. Its
+ *  password is the hub's business: it never gets a local one from a request,
+ *  or a stolen 60 s hub token would turn into a permanent local sign-in. */
+export function isHubManaged(userId) {
+  if (!hubMode()) return false;
+  return db.prepare('SELECT 1 FROM user_hub_links WHERE user_id = ?').get(userId) != null;
+}
 
 /**
  * Link an existing account to a hub user (the owner's one-time link, from
@@ -180,7 +199,12 @@ export const linkHubUser = db.transaction(({ userId, issuer, sub, replace = fals
   const other = db.prepare('SELECT sub FROM user_hub_links WHERE user_id = ? AND issuer = ?').get(userId, issuer);
   if (other) throw new Error(`user ${userId} is already linked to hub user ${other.sub}`);
   if (current && !replace) throw new Error(`hub user ${sub} is already linked to user ${current.user_id}; pass --replace to move the link`);
-  if (current) db.prepare('DELETE FROM user_hub_links WHERE issuer = ? AND sub = ?').run(issuer, sub);
+  if (current) {
+    db.prepare('DELETE FROM user_hub_links WHERE issuer = ? AND sub = ?').run(issuer, sub);
+    // The account left behind is no longer the hub's, so its email (typed
+    // from hub sessions) must not become a way into it by reset or OIDC.
+    db.prepare('UPDATE users SET email = NULL WHERE id = ?').run(current.user_id);
+  }
   db.prepare('INSERT INTO user_hub_links (user_id, issuer, sub) VALUES (?, ?, ?)').run(userId, issuer, sub);
   return { previousUserId: current?.user_id ?? null };
 });
@@ -194,6 +218,24 @@ export const linkHubUser = db.transaction(({ userId, issuer, sub, replace = fals
 export function hubBearer(token) {
   const config = hubConfig();
   if (!config || !token || !looksLikeHubToken(token, config)) return { kind: 'none' };
+  return _verified(token, config);
+}
+
+/**
+ * Does an Authorization header that did not parse as `Bearer <token>` (or
+ * whose token is not the hub's) still carry a hub token somewhere, as in
+ * `Bearer <hub>,`, `Bearer <hub> x` or `Token <hub>`? Then it is a broken
+ * hub request and is refused, rather than left to the cookie.
+ */
+export function headerCarriesHubToken(header) {
+  const config = hubConfig();
+  if (!config || typeof header !== 'string') return false;
+  // A split, not a regex: this runs before sign-in on any header up to
+  // Node's 16 KB limit, and a backtracking pattern there is a cheap stall.
+  return header.split(/[^A-Za-z0-9_.-]+/).some(t => looksLikeHubToken(t, config));
+}
+
+function _verified(token, config) {
   const result = verifyHubToken(token, config);
   if (!result.ok) return { kind: 'invalid', reason: result.reason };
   const { claims } = result;

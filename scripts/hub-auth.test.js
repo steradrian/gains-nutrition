@@ -7,17 +7,20 @@
  *   - a valid token makes the account once and reuses it; the role is the
  *     database's, never the token's;
  *   - every kind of bad hub token is a 401 even with a good cookie on the
- *     same request (no fall-through);
+ *     same request (no fall-through), whatever the Bearer scheme's case;
  *   - an empty users table behind a hub refuses requireAuth, requireAdmin
- *     and /register instead of turning into single-user mode;
- *   - scope=sync reaches /api/v1 with exactly three scopes, scope=user not
- *     at all;
+ *     and /register instead of turning into single-user mode; neither the
+ *     first OIDC sign-in nor the startup repair makes anyone the owner;
+ *   - a hub account never gets a local password from a request;
+ *   - scope=sync reaches /api/v1 with exactly three scopes and its own rate
+ *     limit, scope=user not at all;
+ *   - a full backup round-trips the hub links;
  *   - with HUB_JWKS unset, everything is as upstream.
  */
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -40,16 +43,21 @@ try { req('better-sqlite3'); } catch { sqlite = false; /* not built for this Nod
 if (sqlite) {
   dir = mkdtempSync(join(tmpdir(), 'nt-hub-auth-'));
   process.env.DB_PATH = join(dir, 'test.db');
+  process.env.UPLOADS_PATH = join(dir, 'uploads');
   hubOn();
   db = (await import('../server/db.js')).default;
   const auth = await import('../server/middleware/auth.js');
   const { csrfProtect } = await import('../server/middleware/csrf.js');
   const bearer = await import('../server/middleware/bearer-auth.js');
   const hub = await import('../server/lib/hub-auth.js');
+  const claim = await import('../server/lib/claim-anonymous-data.js');
+  const oidc = await import('../server/routes/oidc.js');
+  const oidcLib = await import('../server/lib/oidc.js');
   const { KNOWN_SCOPES } = await import('../server/lib/api-tokens.js');
   const { default: authRoutes } = await import('../server/routes/auth.js');
   const { default: apiV1Routes } = await import('../server/routes/api/v1/index.js');
-  mods = { auth, bearer, hub, KNOWN_SCOPES };
+  const { default: backupRoutes } = await import('../server/routes/full-backup.js');
+  mods = { auth, bearer, hub, claim, oidc, oidcLib, csrfProtect, KNOWN_SCOPES };
 
   const express = req('express');
   const cookieParser = req('cookie-parser');
@@ -63,6 +71,7 @@ if (sqlite) {
   app.get('/api/admin-only', auth.requireAdmin, (r, res) => res.json({ ok: true }));
   app.use('/api/auth', authRoutes);
   app.use('/api/v1', apiV1Routes);
+  app.use('/api/full-backup', backupRoutes);
   server = app.listen(0);
   base = `http://127.0.0.1:${server.address().port}`;
 }
@@ -115,6 +124,42 @@ test('hub mode, no users: requireAuth, requireAdmin and /register refuse', async
   assert.equal(status.body.setup_required, false);
 });
 
+test('hub mode: the first OIDC sign-in does not become admin', (t) => {
+  if (skip(t)) return;
+  const first = localUser('oidc-first');
+  const result = () => ({ created: true, user: { id: first.id, username: first.username, role: 'user' } });
+  const role = () => db.prepare('SELECT role FROM users WHERE id = ?').get(first.id).role;
+  try {
+    hubOn();
+    const r = result();
+    assert.equal(mods.oidc.bootstrapFirstOidcUser(r), false);
+    assert.equal(r.user.role, 'user');
+    assert.equal(role(), 'user');
+    // The guard is what decides: the same sign-in without a hub is the admin.
+    hubOff();
+    assert.equal(mods.oidc.bootstrapFirstOidcUser(result()), true);
+    assert.equal(role(), 'admin');
+  } finally {
+    hubOn();
+    db.prepare('DELETE FROM users WHERE id = ?').run(first.id);
+  }
+});
+
+// The row stays unowned until the link test claims it with --claim-anonymous.
+const orphanFast = () => db.prepare(`SELECT user_id FROM fasts WHERE notes = 'single-user fast'`).get();
+test('hub mode: startup does not hand single-user data to the only account', (t) => {
+  if (skip(t)) return;
+  hubOn();
+  const only = localUser('first-friend');
+  db.prepare(`INSERT INTO fasts (user_id, start_at, notes) VALUES (NULL, '2026-10-01T20:00', 'single-user fast')`).run();
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM users').get().n, 1);
+  const r = mods.claim.repairOrphanedData();
+  assert.equal(r.hub, true);
+  assert.equal(r.repaired, 0);
+  assert.equal(orphanFast().user_id, null, 'still unowned');
+  assert.notEqual(orphanFast().user_id, only.id);
+});
+
 test('hub mode: /register works for an admin and refuses everyone else', async (t) => {
   if (skip(t)) return;
   hubOn();
@@ -165,10 +210,135 @@ test('the role comes from the database, never from the token', async (t) => {
   assert.equal((await call('/api/admin-only', { token: tokenFor(sub) })).status, 403, 'a demotion applies on the next request');
 });
 
-test('a hub user posts without a CSRF token (the credential is a header)', async (t) => {
+test('a hub user posts without a CSRF token, and a cookie beside it is not the session', async (t) => {
   if (skip(t)) return;
   hubOn();
-  assert.equal((await call('/api/whoami', { method: 'POST', token: tokenFor('og-friend-1'), body: {} })).status, 200);
+  const cookieUser = localUser(`cookie-${crypto.randomUUID()}`);
+  const cookie = mods.auth.signToken(cookieUser);
+  // The cookie carries a CSRF value, so on its own a POST without the header is refused.
+  assert.equal((await call('/api/whoami', { method: 'POST', cookie, body: {} })).status, 403);
+  // A bearer that isn't the hub's leaves the cookie as the session: still checked.
+  const foreign = sign({ ...claimsFor('x'), iss: 'https://proxy.test' }, { kid: 'proxy', key: stranger.privateKey });
+  assert.equal((await call('/api/whoami', { method: 'POST', token: foreign, cookie, body: {} })).status, 403);
+  // The hub token is the session (a header a page cannot set), not the cookie.
+  const res = await call('/api/whoami', { method: 'POST', token: tokenFor('og-friend-1'), cookie, body: {} });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.via, 'hub');
+  assert.notEqual(res.body.user.id, cookieUser.id);
+});
+
+test('the Bearer scheme is case-insensitive: a bad hub token is refused however it is spelled', async (t) => {
+  if (skip(t)) return;
+  hubOn();
+  const cookie = mods.auth.signToken(localUser(`cookie-${crypto.randomUUID()}`, 'admin'));
+  for (const scheme of ['bearer', 'BEARER', 'bEaReR']) {
+    const bad = await call('/api/whoami', { cookie, headers: { authorization: `${scheme} ${BAD['bad signature']()}` } });
+    assert.equal(bad.status, 401, scheme);
+    assert.equal(bad.body.code, 'hub_token_invalid', scheme);
+    const good = await call('/api/whoami', { headers: { authorization: `${scheme}\t${tokenFor('og-friend-1')}` } });
+    assert.equal(good.status, 200, scheme);
+    assert.equal(good.body.via, 'hub', scheme);
+  }
+});
+
+test('a hub account gets no local password: change, reset and forgot are refused', async (t) => {
+  if (skip(t)) return;
+  hubOn();
+  const sub = 'og-password';
+  const me = await call('/api/whoami', { token: tokenFor(sub) });
+  const id = me.body.user.id;
+  const hash = () => db.prepare('SELECT password_hash FROM users WHERE id = ?').get(id).password_hash;
+
+  const change = await call('/api/auth/password', { method: 'PUT', token: tokenFor(sub), body: { new_password: 'Str0ng!Passw0rd#' } });
+  assert.equal(change.status, 403);
+  assert.equal(change.body.code, 'hub_managed');
+  assert.equal(hash(), null);
+
+  // A reset link issued before the account was linked.
+  db.prepare(`INSERT INTO password_reset_tokens (token, user_id, expires_at) VALUES ('pre-link', ?, ?)`)
+    .run(id, new Date(Date.now() + 3600_000).toISOString());
+  const reset = await call('/api/auth/reset-password', { method: 'POST', body: { token: 'pre-link', password: 'Str0ng!Passw0rd#' } });
+  assert.equal(reset.status, 403);
+  assert.equal(hash(), null);
+
+  // The profile email is whatever the person typed; no reset link goes there.
+  db.prepare(`UPDATE users SET email = 'friend@example.test' WHERE id = ?`).run(id);
+  db.prepare(`INSERT INTO app_config (key, value) VALUES ('smtp_host', '127.0.0.1'), ('smtp_port', '1')`).run();
+  try {
+    const forgot = await call('/api/auth/forgot-password', { method: 'POST', body: { email: 'friend@example.test' } });
+    assert.equal(forgot.status, 200, 'the same answer as an unknown address');
+    assert.equal(db.prepare(`SELECT COUNT(*) n FROM password_reset_tokens WHERE user_id = ? AND used = 0 AND token != 'pre-link'`).get(id).n, 0);
+  } finally {
+    db.prepare(`DELETE FROM app_config WHERE key IN ('smtp_host', 'smtp_port')`).run();
+  }
+
+  // Nor from an admin, who behind a hub is a hub session too.
+  const adminSub = 'og-password-admin';
+  assert.equal((await call('/api/whoami', { token: tokenFor(adminSub) })).status, 200);
+  db.prepare(`UPDATE users SET role = 'admin' WHERE id = (SELECT user_id FROM user_hub_links WHERE sub = ?)`).run(adminSub);
+  const byAdmin = await call(`/api/auth/users/${id}/password`, { method: 'PUT', token: tokenFor(adminSub), body: { new_password: 'Str0ng!Passw0rd#' } });
+  assert.equal(byAdmin.status, 403);
+  assert.equal(byAdmin.body.code, 'hub_managed');
+  assert.equal(hash(), null);
+});
+
+test('a linked account that already had a password may rotate it (with the current one)', async (t) => {
+  if (skip(t)) return;
+  hubOn();
+  const bcrypt = req('bcryptjs');
+  const sub = 'og-rotate';
+  const id = Number(db.prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)')
+    .run('rotating-owner', bcrypt.hashSync('Old!Passw0rd#1', 4), 'user').lastInsertRowid);
+  mods.hub.linkHubUser({ userId: id, issuer: ISSUER, sub });
+  const wrong = await call('/api/auth/password', { method: 'PUT', token: tokenFor(sub), body: { current_password: 'nope', new_password: 'New!Passw0rd#2' } });
+  assert.equal(wrong.status, 401);
+  const ok = await call('/api/auth/password', { method: 'PUT', token: tokenFor(sub), body: { current_password: 'Old!Passw0rd#1', new_password: 'New!Passw0rd#2' } });
+  assert.equal(ok.status, 200);
+});
+
+test('a hub account cannot be linked to an OIDC identity, by hand or by a typed email', (t) => {
+  if (skip(t)) return;
+  hubOn();
+  const id = db.prepare('SELECT user_id FROM user_hub_links WHERE sub = ?').get('og-friend-1').user_id;
+  const { linkUser, resolveUser } = mods.oidcLib;
+  assert.throws(() => linkUser(id, 1, 'idp-sub-1', true), /signs in through the hub/);
+  db.prepare(`UPDATE users SET email = 'typed@example.test' WHERE id = ?`).run(id);
+  const provider = { id: 1, auto_link_verified_email: 1, auto_register_new_users: 0 };
+  assert.throws(() => resolveUser(provider, { sub: 'idp-sub-2', email: 'typed@example.test', email_verified: true }), /signs in through the hub/);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM user_oidc_links WHERE user_id = ?').get(id).n, 0);
+});
+
+test('a hub token inside a malformed Authorization header is refused, not left to the cookie', async (t) => {
+  if (skip(t)) return;
+  hubOn();
+  const cookie = mods.auth.signToken(localUser(`cookie-${crypto.randomUUID()}`, 'admin'));
+  const tok = tokenFor('og-friend-1');
+  for (const authorization of [`Bearer ${tok},`, `Bearer ${tok} x`, `Token ${tok}`, `Bearer, ${tok}`]) {
+    const res = await call('/api/whoami', { cookie, headers: { authorization } });
+    assert.equal(res.status, 401, authorization.replace(tok, '<hub>'));
+    assert.equal(res.body.code, 'hub_token_invalid');
+  }
+});
+
+test('looking for a hub token in a 16 KB header is linear (it runs before sign-in)', async (t) => {
+  if (skip(t)) return;
+  hubOn();
+  for (const header of [`Bearer ${'A'.repeat(16300)}`, `Bearer ${'A.'.repeat(8150)}`, `x ${'A-'.repeat(8150)}.`]) {
+    const started = performance.now();
+    assert.equal(mods.hub.headerCarriesHubToken(header), false);
+    assert.ok(performance.now() - started < 50, `${Math.round(performance.now() - started)} ms`);
+  }
+  const res = await call('/api/whoami', { headers: { authorization: `Bearer ${'A'.repeat(16000)}` } });
+  assert.equal(res.status, 401);
+});
+
+test('csrfProtect lets a hub session through even when its user carries a csrf value', (t) => {
+  if (skip(t)) return;
+  hubOn();
+  let passed = false;
+  const res = { status() { return this; }, json() { return this; } };
+  mods.csrfProtect({ method: 'POST', path: '/api/whoami', authVia: 'hub', user: { id: 1, csrf: 'x' }, headers: {} }, res, () => { passed = true; });
+  assert.ok(passed);
 });
 
 // ── Bad tokens: 401, never the cookie ─────────────────────────────────────
@@ -265,6 +435,28 @@ test('requireScope: a sync token holds write:activity, read:body-stats, write:bo
   for (const s of mods.KNOWN_SCOPES) if (!mods.hub.HUB_SYNC_SCOPES.includes(s)) assert.ok(!holds(s), s);
 });
 
+test('a sync backfill has its own bucket and a higher limit than an API token', (t) => {
+  if (skip(t)) return;
+  const limit = mods.bearer.HUB_SYNC_RATE_LIMIT_PER_MIN;
+  assert.ok(limit > 60, 'above the 60/min API-token default');
+  const user = { id: 424242, username: 'u', full_name: null, role: 'user' };
+  const admit = () => {
+    const req = { hub: { scope: 'sync', user }, get: () => '' };
+    const res = { headers: {}, set(k, v) { this.headers[k] = v; }, status(c) { this.code = c; return this; }, json(b) { this.body = b; return this; } };
+    let passed = false;
+    mods.bearer.bearerAuth(req, res, () => { passed = true; });
+    return { passed, res };
+  };
+  for (let i = 1; i <= limit; i++) {
+    const { passed, res } = admit();
+    assert.ok(passed, `request ${i} of ${limit}`);
+    assert.equal(res.headers['X-RateLimit-Limit'], String(limit));
+  }
+  const over = admit();
+  assert.equal(over.passed, false);
+  assert.equal(over.res.code, 429);
+});
+
 test('scope=user does not unlock /api/v1, and scope=sync reaches nothing else', async (t) => {
   if (skip(t)) return;
   hubOn();
@@ -307,11 +499,16 @@ test('scripts/link-hub-user.js links an existing account and can make it admin',
   // The owner opened the app before the link: an empty account was made.
   const early = await call('/api/whoami', { token: tokenFor(sub) });
   assert.notEqual(early.body.user.id, owner.id);
+  db.prepare(`UPDATE users SET email = 'typed-in-hub@example.test' WHERE id = ?`).run(early.body.user.id);
 
   assert.throws(() => run('--user', 'owner', '--sub', sub), /already linked/, 'never moves a link silently');
   assert.throws(() => run('--user', 'nobody', '--sub', sub), /no user/);
-  const out = run('--user', 'owner', '--sub', sub, '--replace', '--admin');
+  const out = run('--user', 'owner', '--sub', sub, '--replace', '--admin', '--claim-anonymous');
   assert.match(out, /linked owner/);
+  assert.match(out, /claimed 1 row\(s\) from single-user mode/);
+  assert.equal(orphanFast().user_id, owner.id, 'the single-user data is the owner\'s now');
+  assert.equal(db.prepare('SELECT email FROM users WHERE id = ?').get(early.body.user.id).email, null,
+    'the account left behind loses the email typed from hub sessions');
 
   const after = await call('/api/whoami', { token: tokenFor(sub) });
   assert.equal(after.body.user.id, owner.id);
@@ -321,11 +518,40 @@ test('scripts/link-hub-user.js links an existing account and can make it admin',
   assert.equal(linkCount(sub), 1);
 });
 
-test('a full backup keeps the hub links (a restore would otherwise re-key everyone)', () => {
-  const src = readFileSync(new URL('../server/routes/full-backup.js', import.meta.url), 'utf8');
-  assert.match(src, /user_hub_links:\s+db\.prepare\('SELECT \* FROM user_hub_links'\)\.all\(\)/, 'dumped');
-  assert.match(src, /INSERT OR IGNORE INTO user_hub_links/, 'restored');
-  assert.match(src, /data\.user_hub_links \|\| \[\]/, 'older backups without it still restore');
+test('a full backup keeps the hub links (a restore would otherwise re-key everyone)', async (t) => {
+  if (skip(t)) return;
+  hubOn();
+  const admin = 'og-backup-admin';
+  assert.equal((await call('/api/whoami', { token: tokenFor(admin) })).status, 200);
+  db.prepare(`UPDATE users SET role = 'admin' WHERE id = (SELECT user_id FROM user_hub_links WHERE sub = ?)`).run(admin);
+  const links = () => db.prepare('SELECT user_id, issuer, sub FROM user_hub_links ORDER BY id').all();
+  const before = links();
+  assert.ok(before.length > 1);
+
+  const made = await call('/api/full-backup', { method: 'POST', token: tokenFor(admin) });
+  assert.equal(made.status, 200);
+  db.prepare('DELETE FROM user_hub_links WHERE sub != ?').run(admin);
+  const restored = await call(`/api/full-backup/${made.body.filename}/restore`, { method: 'POST', token: tokenFor(admin) });
+  assert.equal(restored.status, 200);
+  assert.deepEqual(links(), before, 'every link is back, on the same accounts');
+
+  // A backup made before user_hub_links existed still restores (to no links).
+  const AdmZip = req('adm-zip');
+  const backups = join(dir, 'uploads', 'backups');
+  const zip = new AdmZip(join(backups, made.body.filename));
+  const data = JSON.parse(zip.readAsText('database.json'));
+  delete data.user_hub_links;
+  zip.updateFile('database.json', Buffer.from(JSON.stringify(data)));
+  zip.writeZip(join(backups, 'nutritrace-backup-older.zip'));
+  const older = await call('/api/full-backup/nutritrace-backup-older.zip/restore', { method: 'POST', token: tokenFor(admin) });
+  assert.equal(older.status, 200);
+  assert.equal(links().length, 0);
+
+  // Back to the full backup for the tests after this one.
+  const adminLink = before.find(l => l.sub === admin);
+  db.prepare('INSERT INTO user_hub_links (user_id, issuer, sub) VALUES (?, ?, ?)').run(adminLink.user_id, ISSUER, admin);
+  assert.equal((await call(`/api/full-backup/${made.body.filename}/restore`, { method: 'POST', token: tokenFor(admin) })).status, 200);
+  assert.deepEqual(links(), before);
 });
 
 // ── HUB_JWKS unset: upstream behaviour ────────────────────────────────────
@@ -340,6 +566,8 @@ test('HUB_JWKS unset: hub tokens are foreign bearers, and single-user mode is ba
     assert.equal(both.body.via, 'cookie', 'the hub token is ignored, the cookie decides');
     assert.equal((await call('/api/whoami', { token: tokenFor('og-friend-1') })).status, 401, 'a hub token signs nobody in');
     assert.equal((await call('/api/whoami', { token: BAD['bad signature']() })).status, 401);
+    const linked = db.prepare('SELECT user_id FROM user_hub_links LIMIT 1').get().user_id;
+    assert.equal(mods.hub.isHubManaged(linked), false, 'passwords are upstream again');
 
     db.prepare('DELETE FROM users').run();
     assert.equal(mods.auth.userMgmtActive(), false);

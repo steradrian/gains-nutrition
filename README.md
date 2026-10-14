@@ -148,8 +148,9 @@ Pre-release testers can grab the rolling `dev-latest` APK; occasional milestone 
 | `AI_PROVIDER` | No |  | Lock Trace to a provider: `claude` \| `openai` \| `gemini` \| `oai-compat`. |
 | `OIDC_ISSUER` | No |  | Enable a single OIDC provider by setting `OIDC_ISSUER` + `OIDC_CLIENT_ID` + `OIDC_CLIENT_SECRET`. Numbered form (`OIDC_PROVIDER_2_*`) for multi-provider. |
 | `SMTP_HOST` | No |  | SMTP server for password reset & invites; also `SMTP_PORT` (587), `SMTP_SECURE` (false), `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`. |
-| `HUB_JWKS` | No | unset | Public keys (JWKS JSON, ES256) of a hub that signs in for its users with 60 s hub tokens. Set, there is no single-user mode and the first `/register` is not open. Unset, the hub path is off. Link an existing account with `node scripts/link-hub-user.js`. |
+| `HUB_JWKS` | No | unset | Public keys (JWKS JSON, ES256) of a hub that signs in for its users with 60 s hub tokens. Set, there is no single-user mode and the first `/register` is not open. Unset, the hub path is off. Link an existing account with `node scripts/link-hub-user.js` (`--claim-anonymous` adopts the single-user data, which is never handed out automatically behind a hub). Hub accounts get no local password. |
 | `HUB_ISSUER` | With `HUB_JWKS` |  | The hub tokens' `iss`. |
+| `HUB_SYNC_RATE_LIMIT_PER_MIN` | No | `600` | Requests per minute per person for the hub's background sync on `/api/v1` (its own bucket, apart from API tokens). |
 
 Full list (Docker secrets `*_FILE` variants, air-gap `OFF_LOCAL_ONLY`, per-provider AI knobs, all `OIDC_*` options) at [docs/self-hosting/env-vars/](https://traceapps.github.io/docs/self-hosting/env-vars/). SMTP and AI can also be set in the Settings UI; env vars take priority and lock those fields.
 

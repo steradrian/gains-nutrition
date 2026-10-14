@@ -9,14 +9,19 @@
  */
 import { lookupRawToken } from '../lib/api-tokens.js';
 import { HUB_SYNC_SCOPES } from '../lib/hub-auth.js';
+import { bearerToken } from './auth.js';
 
 const RATE_LIMIT_PER_MIN = Number(process.env.API_RATE_LIMIT_PER_MIN) || 60;
+// The hub's background sync backfills history in bursts (one request per
+// activity or measurement), so it gets its own bucket per user and a higher
+// ceiling than a hand-made API token.
+export const HUB_SYNC_RATE_LIMIT_PER_MIN = Number(process.env.HUB_SYNC_RATE_LIMIT_PER_MIN) || 600;
 const WINDOW_MS = 60 * 1000;
 
 // Per-token sliding-window counters. Cleared lazily on access.
 const _buckets = new Map();
 
-function _take(tokenId) {
+function _take(tokenId, limit) {
   const now = Date.now();
   let b = _buckets.get(tokenId);
   if (!b || now >= b.resetAt) {
@@ -26,9 +31,9 @@ function _take(tokenId) {
   b.count++;
   return {
     count: b.count,
-    remaining: Math.max(0, RATE_LIMIT_PER_MIN - b.count),
+    remaining: Math.max(0, limit - b.count),
     resetAt: b.resetAt,
-    over: b.count > RATE_LIMIT_PER_MIN,
+    over: b.count > limit,
   };
 }
 
@@ -51,30 +56,28 @@ export function bearerAuth(req, res, next) {
     }
     return _admit(req, res, next, {
       token: {
-        id: `hub:${req.hub.user.id}`, user_id: req.hub.user.id, name: 'hub sync',
+        id: `hub-sync:${req.hub.user.id}`, user_id: req.hub.user.id, name: 'hub sync',
         scopes: [...HUB_SYNC_SCOPES], expires_at: null, last_used_at: null, created_at: null,
       },
       user: req.hub.user,
-    });
+    }, HUB_SYNC_RATE_LIMIT_PER_MIN);
   }
 
-  const auth = req.get('authorization') || '';
-  const m = auth.match(/^Bearer\s+(\S+)\s*$/i);
-  if (!m) {
+  const raw = bearerToken(req.get('authorization'));
+  if (!raw) {
     return res.status(401).json({ error: 'Token required', code: 'auth_missing' });
   }
 
-  const lookup = lookupRawToken(m[1]);
+  const lookup = lookupRawToken(raw);
   if (!lookup) {
     return res.status(401).json({ error: 'Invalid token', code: 'auth_invalid' });
   }
-  return _admit(req, res, next, lookup);
+  return _admit(req, res, next, lookup, RATE_LIMIT_PER_MIN);
 }
 
-function _admit(req, res, next, lookup) {
-  // Rate limit
-  const bucket = _take(lookup.token.id);
-  res.set('X-RateLimit-Limit', String(RATE_LIMIT_PER_MIN));
+function _admit(req, res, next, lookup, limit) {
+  const bucket = _take(lookup.token.id, limit);
+  res.set('X-RateLimit-Limit', String(limit));
   res.set('X-RateLimit-Remaining', String(bucket.remaining));
   res.set('X-RateLimit-Reset', String(Math.floor(bucket.resetAt / 1000)));
   if (bucket.over) {
