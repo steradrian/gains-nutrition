@@ -315,7 +315,10 @@ cursor could not move, so that never spins). The cursor is a position
 on (`updated_at`, `date`), so any number of days changed in one second
 (as "Clear all data" does) pages through. It never moves into the
 current second, which can still be written to, so rows from it come
-again on the next poll: drop repeats by `(date, updated_at)`.
+again on the next poll: keep one value per `date` and let the row from the
+later poll replace the earlier one, even when `updated_at` is the same (a day
+can change again within the second it was polled). Do not drop a row as a
+repeat because its `(date, updated_at)` was seen before.
 `updated_at` is the diary row's last change (any change to the day, so
 an upper bound for the weight), in whole seconds. A full-backup restore
 brings back the backup's rows with their own `updated_at`, so polling
