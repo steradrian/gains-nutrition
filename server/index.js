@@ -191,8 +191,6 @@ router.use(authenticate);   // attach req.user on every request
 // Remember the address an admin uses, so emailed links (password reset,
 // invite, sharing) go there instead of to whatever Host a request claims.
 // Not a hub request: those arrive on the hub's internal address for us.
-// The token's role only spares the lookup for everyone else; the decision is
-// the database's (a demoted admin's token still says admin).
 router.use((req, res, next) => {
   if (req.user?.role === 'admin' && req.authVia !== 'hub' && hasAdminRole(req)) rememberAdminOrigin(req);
   next();
