@@ -29,7 +29,8 @@ export function csrfProtect(req, res, next) {
   // Signed in by our bearer token: CSRF-safe (a page can't set the header).
   // A session from the cookie is checked even when the request carries
   // someone else's bearer (a reverse proxy can add one).
-  if (req.authVia === 'bearer') return next();
+  // A hub token is header-borne too; the hub checks Sec-Fetch-Site itself.
+  if (req.authVia === 'bearer' || req.authVia === 'hub') return next();
   // The API (/api/v1, /api/mcp) signs in by its own API token only, never
   // the cookie, and its clients send no CSRF token.
   if (BEARER_ONLY.some(p => req.path === p || req.path.startsWith(p + '/')) && req.headers.authorization?.startsWith('Bearer ')) return next();

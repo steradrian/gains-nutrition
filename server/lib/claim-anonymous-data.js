@@ -1,4 +1,5 @@
 import db from '../db.js';
+import { hubInstance } from './hub-auth.js';
 
 // ── Claim anonymous (single-user mode) data for the first real account ────
 // Single-user mode has no users row, so every write lands under a sentinel
@@ -83,11 +84,17 @@ export function countOrphanedRows() {
   return n;
 }
 
+// Behind a hub the one account may be whoever's request arrived first, not
+// the owner, so nothing is adopted automatically there: the owner claims it
+// with scripts/link-hub-user.js --claim-anonymous. That holds while hub
+// accounts exist even with HUB_JWKS unset: the one account left may still be
+// a friend's the hub made.
 export function repairOrphanedData() {
   const users = db.prepare('SELECT id FROM users').all();
   if (users.length === 0) return { repaired: 0, rows: 0 };   // single-user mode, nothing to do
   const rows = countOrphanedRows();
   if (rows === 0) return { repaired: 0, rows: 0 };
+  if (hubInstance()) return { repaired: 0, rows, hub: true };
   if (users.length > 1) return { repaired: 0, rows, ambiguous: true };
   claimAnonymousData(users[0].id);
   return { repaired: users[0].id, rows };
