@@ -14,6 +14,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Home services are an admin's by default.** Any signed-in account could save a "Mealie", "CookTrace" or push address on the server's network (`127.0.0.1`, the router, another container) and have the server fetch it. This covers the proxies, the push test, background pushes and image imports from those services. `ALLOW_PRIVATE_SERVICE_URLS=1` opens it to everyone again.
 - **`TRUST_PROXY`.** Behind a reverse proxy every visitor looked like the proxy, so one person guessing passwords locked everyone out of sign-in. With `TRUST_PROXY` set, each visitor is counted separately.
 - **Hub tokens work once.** A hub token whose `jti` was already used is refused, and a signature spelled in a non-canonical base64url form no longer verifies.
+- **Admin checks read the role from the database.** A session token signed before an admin was demoted (or deleted) no longer passes admin-only routes, account creation or the private-address opt-ins.
+- **The sign-in throttle is bounded and counts IPv6 per /64.** Its counters can no longer grow without limit, and an IPv6 client can't get fresh tries by rotating addresses inside its /64.
+- **A `TRUST_PROXY` hop count logs a warning at startup.** A count lets a client that reaches the port directly choose its own address; list the proxies' addresses or subnets instead.
+- **Accounts that aren't admins no longer learn why a service address was refused.** Mealie, CookTrace and the push test say "could not reach" whether the address is on the server's network or doesn't resolve at all; the detail goes to the server log, and admins still see it.
+- **Webhook deliveries connect to the address that was checked** (no second DNS lookup a rebinding server could answer differently).
+- **More IPv6 forms of private addresses are refused**: IPv4-compatible (`::7f00:1`), local-use NAT64 (`64:ff9b:1::/48`), 6to4 (`2002::/16`, by the IPv4 address inside) and site-local (`fec0::/10`).
+- **Hub requests leave an audit trail** at `LOG_LEVEL=debug`: the token's `jti`, a hash of its `sub` and its `act`, never the token itself.
 
 ### Added
 

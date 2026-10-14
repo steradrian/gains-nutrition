@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import test from 'node:test';
-import { applyTrustProxy, trustProxySetting } from '../server/lib/trust-proxy.js';
+import { applyTrustProxy, trustProxySetting, trustProxyWarning } from '../server/lib/trust-proxy.js';
 
 const req = createRequire(new URL('../server/package.json', import.meta.url));
 const express = req('express');
@@ -53,6 +53,32 @@ test('TRUST_PROXY=1: the address the proxy added, not the one the client typed',
 test('TRUST_PROXY as a list of proxy addresses', async () => {
   assert.equal(await ipSeen({ TRUST_PROXY: 'loopback' }, '203.0.113.9'), '203.0.113.9');
   assert.equal(await ipSeen({ TRUST_PROXY: '10.9.9.9' }, '203.0.113.9'), '127.0.0.1', 'a request not from a listed proxy keeps its own address');
+});
+
+// Why the list form is preferred: with a count, a client that reaches the
+// port directly is taken for the proxy, so its own X-Forwarded-For decides.
+test('a hop count lets a direct client choose its address; the list form does not', async () => {
+  assert.equal(await ipSeen({ TRUST_PROXY: '1' }, '198.51.100.77'), '198.51.100.77', 'direct client, count: its own choice');
+  assert.equal(await ipSeen({ TRUST_PROXY: '10.9.9.9' }, '198.51.100.77'), '127.0.0.1', 'direct client, list: its real address');
+});
+
+test('a hop count warns at startup, the list form and unset do not', () => {
+  const warned = env => {
+    const lines = [];
+    applyTrustProxy(express(), env, { warn: m => lines.push(m) });
+    return lines;
+  };
+  for (const v of ['1', 'true', '2']) {
+    const lines = warned({ TRUST_PROXY: v });
+    assert.equal(lines.length, 1, v);
+    assert.match(lines[0], /hop count/);
+    assert.match(lines[0], /addresses or subnets/);
+  }
+  assert.deepEqual(warned({ TRUST_PROXY: 'loopback, 172.16.0.0/12' }), []);
+  assert.deepEqual(warned({ TRUST_PROXY: '10.0.0.2' }), []);
+  assert.deepEqual(warned({}), []);
+  assert.equal(trustProxyWarning(undefined), null);
+  assert.equal(trustProxyWarning('loopback'), null);
 });
 
 test('a TRUST_PROXY Express cannot read stops startup', () => {
@@ -97,6 +123,16 @@ test('behind a proxy with TRUST_PROXY, one visitor\'s guesses do not lock out th
     assert.equal(await attempt(s, '198.51.100.1'), 429, 'the guesser is throttled');
     assert.equal(await attempt(s, '198.51.100.2'), 401, 'someone else still gets to try');
     assert.equal(await attempt(s, '9.9.9.9, 198.51.100.1'), 429, 'a typed X-Forwarded-For entry does not reset the count');
+  } finally { s.close(); }
+});
+
+test('an IPv6 visitor cannot rotate addresses inside its /64 to get fresh tries', async (t) => {
+  if (!sqlite) return t.skip('better-sqlite3 is not built for this Node');
+  const s = await loginServer({ TRUST_PROXY: '1' });
+  try {
+    for (let i = 1; i <= 10; i++) assert.equal(await attempt(s, `2001:db8:5:6::${i.toString(16)}`), 401);
+    assert.equal(await attempt(s, '2001:db8:5:6:ffff:ffff:ffff:ffff'), 429, 'same /64, new address');
+    assert.equal(await attempt(s, '2001:db8:5:7::1'), 401, 'the next /64 is someone else');
   } finally { s.close(); }
 });
 
