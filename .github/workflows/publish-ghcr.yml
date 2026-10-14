@@ -41,7 +41,7 @@ jobs:
       - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         id: meta
         with:
-          images: ghcr.io/steradrian/nutritrace
+          images: ghcr.io/steradrian/gains-nutrition
           tags: |
             type=sha,format=long,prefix=
             type=raw,value=main,enable={{is_default_branch}}
