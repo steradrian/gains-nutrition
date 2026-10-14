@@ -18,13 +18,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - **Activity integrations can update and delete what they logged.** `POST /api/v1/activity/batch` (up to 100 upserts and deletes) and `DELETE /api/v1/activity/external/{external_id}`. One `external_id` is one row for good, however often or concurrently it is posted.
-- **`GET /api/v1/body-stats`** (scope `read:body-stats`): the diary's daily weight in kg, with `updated_since` for polling.
-- **Workouts from openGym.** Activity rows marked `source: "opengym"` are shown but not counted on a day a wearable reports active calories, and say which wearable covers them. Once you edit or delete one in the app, the sync leaves it as you made it.
+- **`GET /api/v1/body-stats`** (scope `read:body-stats`): the diary's daily weight in kg, polled with `updated_since` then a `next_cursor`.
+- **Workouts from openGym.** Activity rows marked `source: "opengym"` are shown but not counted on a day a wearable reports active calories, and say which wearable covers them.
+- **Your edit wins over every integration.** Once you change or delete an entry an integration made, its later updates leave it as you made it. Deleting the workout at the source still removes the entry.
 
 ### Fixed
 
 - **Scale readings sent to `POST /api/v1/body-measurements` now show on the diary's Weight card and feed the adaptive calorie goal.** The weight was stored under a key nothing read. The day is the `date` sent (or the reading's day in your timezone), no longer the server's timezone, and the `body_stat.logged` webhook fires.
 - **Editing an integration's activity entry in the app no longer cuts it loose.** The entry kept its id in its source, which the edit reset, so the next sync made a second entry.
+- **Workouts no longer count twice in Adaptive and Dynamic modes.** With "Adjust goal from activity" on, the day's activity was added on top of a target that already includes training. It now adds only to a fixed target (including Adaptive's first weeks and a Dynamic day without wearable data).
 
 ---
 

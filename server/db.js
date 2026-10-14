@@ -902,10 +902,13 @@ if (!columnExists('activity_log', 'is_template')) {
 // (NULL owner counted as 0, since SQLite treats NULLs as distinct), deleted
 // rows included, so a key names one row for good: a re-post after a delete
 // brings that row back rather than making another. Earlier duplicates are
-// folded first: the live row with the highest id keeps the key, the others
-// are soft-deleted and lose it.
-// user_edited_at: when the person changed or deleted a bridge row
-// (source 'opengym') in the app; the bridge never writes over it.
+// folded first, keeping the row integrations were actually updating: the
+// old lookup (no ORDER BY, served by idx_activity_log_client_key, where
+// these rows all have client_key NULL) found the live row with the lowest
+// id. With no live row, the last one changed keeps the key. The others are
+// soft-deleted and lose it.
+// user_edited_at: when the person changed or deleted a keyed row in the
+// app; no integration update writes over it.
 if (!columnExists('activity_log', 'external_id')) {
   // One transaction: a crash between the two must not leave the column
   // in place with the keys still in source.
@@ -919,11 +922,13 @@ if (!columnExists('activity_log', 'user_edited_at')) {
 }
 if (!db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_activity_external'`).get()) {
   db.transaction(() => {
-    db.exec(`
+    const folded = db.prepare(`
       WITH ranked AS (
         SELECT id, ROW_NUMBER() OVER (
           PARTITION BY IFNULL(user_id, 0), external_id
-          ORDER BY (deleted_at IS NULL) DESC, id DESC
+          ORDER BY (deleted_at IS NULL) DESC,
+                   CASE WHEN deleted_at IS NULL THEN id END ASC,
+                   updated_at DESC, id DESC
         ) AS n
         FROM activity_log WHERE external_id IS NOT NULL
       )
@@ -932,7 +937,8 @@ if (!db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'id
              deleted_at = COALESCE(deleted_at, datetime('now')),
              updated_at = datetime('now')
        WHERE id IN (SELECT id FROM ranked WHERE n > 1)
-    `);
+    `).run().changes;
+    if (folded) console.log(`[db] activity external_id: folded ${folded} duplicate row(s) into the one each key resolved to`);
     db.exec(`CREATE UNIQUE INDEX idx_activity_external ON activity_log(IFNULL(user_id, 0), external_id) WHERE external_id IS NOT NULL`);
   })();
 }

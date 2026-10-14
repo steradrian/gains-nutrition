@@ -282,9 +282,13 @@ user's `weightUnit` setting, as the app shows it).
 | Param           | Type    | Default | Description |
 |-----------------|---------|---------|-------------|
 | `from`, `to`    | date    | open    | `YYYY-MM-DD`, inclusive. No default range. |
-| `updated_since` | instant | —       | ISO 8601 with `Z` or an offset, inclusive. Polling mode (below). |
+| `updated_since` | instant | —       | ISO 8601 with `Z` or an offset, inclusive. Starts polling (below). |
+| `cursor`        | string  | —       | A `next_cursor` from an earlier poll. Not with `updated_since` or `offset`. |
 | `limit`         | int     | 200     | 1..1000 |
-| `offset`        | int     | 0       | |
+| `offset`        | int     | 0       | Listing only. |
+
+**Listing** (no `updated_since`, no `cursor`): days with a weight, in
+date order, paged by `limit`/`offset`.
 
 ```json
 {
@@ -293,16 +297,29 @@ user's `weightUnit` setting, as the app shows it).
 }
 ```
 
-Without `updated_since`, days with no weight are left out and items
-come in date order. With it, every day whose diary row changed at or
-after that instant comes back, oldest change first, with
-`weight_kg: null` when the day has no weight now (a removed weight or
-an erased day), so a poller sees removals. `updated_at` is the diary
-row's last change (any change to the day, so an upper bound for the
-weight), in whole seconds: poll again with the largest `updated_at`
-seen and drop repeats. A full-backup restore brings back the backup's
-rows with their own `updated_at`, so polling cannot see what it
-removed: after a restore, read the whole range again.
+**Polling** (`updated_since` for the first call, then `cursor`): every
+day whose diary row changed at or after the start, oldest change first
+(ties in date order), with `weight_kg: null` when the day has no weight
+now (a removed weight or an erased day), so a poller sees removals.
+
+```json
+{
+  "items": [ { "date": "2026-10-13", "weight_kg": null, "updated_at": "2026-10-14T06:41:10Z" } ],
+  "total": 300, "limit": 200, "next_cursor": "eyJ1Ijoi...", "has_more": true
+}
+```
+
+Keep `next_cursor` (always set) and send it as `cursor` next time; while
+`has_more` is true, call again straight away (it is false when the
+cursor could not move, so that never spins). The cursor is a position
+on (`updated_at`, `date`), so any number of days changed in one second
+(as "Clear all data" does) pages through. It never moves into the
+current second, which can still be written to, so rows from it come
+again on the next poll: drop repeats by `(date, updated_at)`.
+`updated_at` is the diary row's last change (any change to the day, so
+an upper bound for the weight), in whole seconds. A full-backup restore
+brings back the backup's rows with their own `updated_at`, so polling
+cannot see what it removed: after a restore, read the whole range again.
 
 ### `POST /api/v1/activity`
 
@@ -310,14 +327,23 @@ removed: after a restore, read the whole range again.
 
 One diary Activity row:
 `{ date, name, kcal, duration_min?, distance?, external_id?, source? }`.
-`external_id` (up to 128 characters) names one row per user for good:
-re-posting it updates that row in place (a new `date` moves it), a post
-after a delete brings the same row back, and a second row is never
-made (a unique index backs this). `source: "opengym"` marks the openGym
-bridge's rows: on a day a wearable reports active calories they are
-shown with `covered_by: "<wearable source>"` but not counted toward the
-day's activity total, whatever the user's policy. After the user edits
-or deletes such a row in the app, upserts leave it alone.
+`external_id` (a longer one is cut to 128 characters, as it always
+was) names one row per user for good: re-posting it updates that row in
+place (a new `date` moves it), a post after a delete brings the same
+row back, and a second row is never made (a unique index backs this).
+`source: "opengym"` marks the openGym bridge's rows: on a day a wearable
+reports active calories they are shown with
+`covered_by: "<wearable source>"` but not counted toward the day's
+activity total, whatever the user's policy.
+
+**The user's edit wins, for every integration.** Once the user changes
+or deletes a row an integration made (in the web app, on the phone, or
+with "Clear all data"), no update from any integration writes over it:
+upserts leave it as the user made it and answer `user_edited`. A delete
+from the integration (`DELETE /api/v1/activity/external/{external_id}`
+or a batch delete: the workout no longer exists) still removes the row,
+edited or not. It then stays the user's: a later post answers
+`user_edited` and does not bring it back.
 
 Response `201` (created) or `200`:
 `{ ok, status, activity_id, date, kcal, daily_total_kcal, updated }`,
@@ -341,7 +367,8 @@ route would answer).
 
 **Requires scope:** `write:activity`.
 
-Soft-deletes the row with that key. Idempotent: an unknown or already
+Soft-deletes the row with that key, even one the user edited (the
+source says the workout is gone). Idempotent: an unknown or already
 deleted key answers `200 { ok: true, deleted: false, activity_id: null }`.
 Otherwise `200 { ok: true, deleted: true, activity_id, date, daily_total_kcal }`.
 

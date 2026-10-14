@@ -18,7 +18,7 @@ import { isServerOnlyKey } from '../lib/server-only-keys.js';
 import { localizeImage, isExternalUrl } from '../lib/image-localizer.js';
 import { mirrorWeightToBodyStats } from '../lib/wellness-mirror.js';
 import { cleanCreateKey, findByCreateKey, setCreateKey } from '../lib/create-keys.js';
-import { BRIDGE_SOURCE, isIntegrationRow } from '../lib/active-calories.js';
+import { isIntegrationRow } from '../lib/active-calories.js';
 import { clientClock, parseUtc, pushWins as clockPushWins, editStamp, resolveNote } from '../lib/sync-clock.js';
 
 // #199 (@tellis82): the POST /api/foods and POST /api/meals routes
@@ -539,12 +539,13 @@ router.post('/push', wrap(async (req, res) => {
         // Only this account's own row changes (as PUT /api/... does); anyone
         // else's is answered as if the push lost the time check.
         if (_ownsRow(existing, u) && pushWins(a.updated_at, existing.updated_at, existing)) {
-          // A bridge row changed or deleted on the phone is the person's
-          // edit, which the bridge never writes over (as in routes/activity.js).
-          const bridgeRow = existing.source === BRIDGE_SOURCE;
+          // An integration's row changed or deleted on the phone is the
+          // person's edit, which no integration update writes over (as in
+          // routes/activity.js).
+          const keyedRow = existing.external_id != null;
           if (a.deleted_at) {
             db.prepare(`UPDATE activity_log SET deleted_at = datetime('now'), updated_at = ?, user_edited_at = CASE WHEN ? THEN datetime('now') ELSE user_edited_at END WHERE id = ?`)
-              .run(stamp(a.updated_at, existing), bridgeRow ? 1 : 0, a.server_id);
+              .run(stamp(a.updated_at, existing), keyedRow ? 1 : 0, a.server_id);
           } else {
             const next = {
               name: a.name,
@@ -553,7 +554,7 @@ router.post('/push', wrap(async (req, res) => {
               distance: a.distance != null ? String(a.distance).slice(0, 40) : null,
               date: a.date,
             };
-            const edited = bridgeRow && Object.keys(next).some(k => next[k] !== existing[k]);
+            const edited = keyedRow && Object.keys(next).some(k => next[k] !== existing[k]);
             // An integration's row keeps its source, whatever the phone says.
             const source = isIntegrationRow(existing) ? existing.source : (a.source || 'manual_form');
             db.prepare(

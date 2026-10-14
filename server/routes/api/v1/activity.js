@@ -29,7 +29,7 @@
  *     kcal:          270,                 // required, kilocalories burned
  *     duration_min:  40,                  // optional
  *     distance:      "12.4 km",           // optional, free text, <=40 chars
- *     external_id:   "og:w:lq2k9x7a1b",   // optional idempotency key, <=128 chars
+ *     external_id:   "og:w:lq2k9x7a1b",   // optional idempotency key, cut to 128 chars
  *     source:        "opengym"            // optional; only "opengym" means anything
  *   }
  *
@@ -38,8 +38,13 @@
  * delete brings the row back, and nothing ever makes a second row for it.
  * source "opengym" marks the openGym bridge's rows: on a day a wearable
  * reports active calories they are shown but not counted
- * (lib/active-calories.js). Once the person edits or deletes such a row in
- * the app, upserts leave it alone and answer status "user_edited".
+ * (lib/active-calories.js).
+ *
+ * The person's edit wins, for every integration: once they change or
+ * delete a keyed row in the app (web, phone, "Clear all data"), upserts
+ * leave it as they made it and answer status "user_edited". A delete from
+ * the integration (the workout no longer exists) still removes the row,
+ * edited or not.
  */
 import { Router } from 'express';
 import db from '../../../db.js';
@@ -55,16 +60,15 @@ const EXTERNAL_ID_MAX = 128;
 
 const _invalid = (code, error) => ({ invalid: { code, error } });
 
+// As before this route had a key column: a longer key is cut to 128
+// characters (so are the keys the migration moved out of source), never
+// refused, so an integration with long ids keeps hitting its own rows.
 function _externalId(raw) {
-  if (raw == null || raw === '') return { value: null };
+  if (!raw) return { value: null };
   if (typeof raw !== 'string' && !(typeof raw === 'number' && Number.isFinite(raw))) {
     return _invalid('bad_external_id', 'external_id must be a string');
   }
-  const value = String(raw).trim();
-  if (!value || value.length > EXTERNAL_ID_MAX) {
-    return _invalid('bad_external_id', `external_id must be 1..${EXTERNAL_ID_MAX} characters`);
-  }
-  return { value };
+  return { value: String(raw).slice(0, EXTERNAL_ID_MAX) };
 }
 
 /** Validate one entry: { value } or { invalid: { code, error } }. */

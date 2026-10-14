@@ -309,12 +309,16 @@ function restoreFromZip(zip) {
     });
     // One row per key (the unique index), so INSERT OR IGNORE never drops
     // a live row behind an older deleted one. Folded as the db.js migration
-    // does: the live row with the highest id keeps the key, the others are
+    // does: the live row with the lowest id (the one the old lookup kept
+    // updating) keeps the key, else the last one changed; the others are
     // soft-deleted and lose it.
     const keyOf = r => `${r.user_id ?? 0}\0${r.external_id}`;
-    const keeps = (r, cur) => ((r.deleted_at == null) !== (cur.deleted_at == null)
-      ? r.deleted_at == null
-      : Number(r.id) > Number(cur.id));
+    const keeps = (r, cur) => {
+      if ((r.deleted_at == null) !== (cur.deleted_at == null)) return r.deleted_at == null;
+      if (r.deleted_at == null) return Number(r.id) < Number(cur.id);
+      if ((r.updated_at ?? '') !== (cur.updated_at ?? '')) return (r.updated_at ?? '') > (cur.updated_at ?? '');
+      return Number(r.id) > Number(cur.id);
+    };
     const keepers = new Map();
     for (const r of activityRows) {
       if (r.external_id == null) continue;

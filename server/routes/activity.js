@@ -94,9 +94,9 @@ router.put('/:id', wrap((req, res) => {
   const fields = sanitize({ ...existing, ...req.body });
   const { name, kcal, duration_min, distance, met, is_template } = fields;
   const source = isIntegrationRow(existing) ? existing.source : fields.source;
-  // A person's edit to a bridge row is theirs: the bridge never writes
-  // over it again.
-  const edited = existing.source === BRIDGE_SOURCE
+  // A person's edit to an integration's row is theirs: no integration
+  // update writes over it again (routes/api/v1/activity.js).
+  const edited = existing.external_id != null
     && ['name', 'kcal', 'duration_min', 'distance'].some(k => fields[k] !== existing[k]);
   db.prepare(`
     UPDATE activity_log SET name = ?, kcal = ?, duration_min = ?, distance = ?, source = ?, met = ?, is_template = ?,
@@ -109,10 +109,10 @@ router.put('/:id', wrap((req, res) => {
 router.delete('/:id', wrap((req, res) => {
   const u = uid(req);
   const id = Number(req.params.id);
-  // Deleting a bridge row in the app is an edit too: the bridge does not
-  // bring it back.
+  // Deleting an integration's row in the app is an edit too: no
+  // integration update brings it back.
   const set = `deleted_at = datetime('now'), updated_at = datetime('now'),
-               user_edited_at = CASE WHEN source = '${BRIDGE_SOURCE}' THEN datetime('now') ELSE user_edited_at END`;
+               user_edited_at = CASE WHEN external_id IS NOT NULL THEN datetime('now') ELSE user_edited_at END`;
   const sql = u == null
     ? `UPDATE activity_log SET ${set} WHERE id = ? AND user_id IS NULL AND deleted_at IS NULL`
     : `UPDATE activity_log SET ${set} WHERE id = ? AND user_id = ? AND deleted_at IS NULL`;

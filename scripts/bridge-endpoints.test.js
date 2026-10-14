@@ -154,8 +154,6 @@ test('DELETE soft-deletes by key, is idempotent, and a re-post brings the same r
   assert.ok(rowsFor(user, 'og:w:lq2k9x7a1b')[0].deleted_at);
   assert.equal((await call('/api/v1/activity/external/og:w:lq2k9x7a1b', { method: 'DELETE', token })).body.deleted, false);
   assert.equal((await call('/api/v1/activity/external/og:w:never', { method: 'DELETE', token })).body.deleted, false);
-  assert.equal((await call(`/api/v1/activity/external/${'x'.repeat(129)}`, { method: 'DELETE', token })).body.code, 'bad_external_id');
-
   const back = await call('/api/v1/activity', { method: 'POST', token, body: workout() });
   assert.equal(back.status, 201);
   assert.equal(back.body.status, 'created');
@@ -181,8 +179,25 @@ test('validation: bad fields are 400 with a stable code', async () => {
   assert.equal((await post(workout({ kcal: 10001 }))).body.code, 'bad_kcal');
   assert.equal((await post(workout({ duration_min: -1 }))).body.code, 'bad_duration');
   assert.equal((await post(workout({ name: ' ' }))).body.code, 'bad_name');
-  assert.equal((await post(workout({ external_id: 'x'.repeat(129) }))).body.code, 'bad_external_id');
   assert.equal((await post(workout({ external_id: { a: 1 } }))).body.code, 'bad_external_id');
+});
+
+test('an external_id over 128 characters is cut to 128, as before the key column, never refused', async () => {
+  const user = newUser();
+  const token = pat(user);
+  const long = `og:w:${'x'.repeat(200)}`;
+  const first = await call('/api/v1/activity', { method: 'POST', token, body: workout({ external_id: long }) });
+  assert.equal(first.status, 201);
+  const again = await call('/api/v1/activity', { method: 'POST', token, body: workout({ external_id: long, kcal: 200 }) });
+  assert.equal(again.body.status, 'updated', 'the same long id finds its row');
+  assert.equal(again.body.activity_id, first.body.activity_id);
+  const rows = rowsFor(user, long.slice(0, 128));
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].external_id.length, 128);
+  const del = await call(`/api/v1/activity/external/${long}`, { method: 'DELETE', token });
+  assert.equal(del.body.deleted, true, 'DELETE cuts the key the same way');
+  const batch = await call('/api/v1/activity/batch', { method: 'POST', token, body: { items: [workout({ external_id: long })] } });
+  assert.deepEqual([batch.body.results[0].status, batch.body.results[0].external_id], ['created', long.slice(0, 128)]);
 });
 
 // ── Batch ─────────────────────────────────────────────────────────────────
@@ -342,18 +357,44 @@ test('an edit or delete pushed from the phone counts as the person\'s edit too',
   assert.equal((await call('/api/v1/activity', { method: 'POST', token, body: workout({ external_id: 'og:w:phone-del', kcal: 1 }) })).body.status, 'user_edited');
 });
 
-test("another integration's row keeps its key through an app edit and is still updated by re-posts", async () => {
+test("every integration: the person's edit wins over its updates, the row keeps its key and source", async () => {
   const user = newUser();
   const token = pat(user);
   const cookie = auth.signToken(user);
-  const created = await call('/api/v1/activity', { method: 'POST', token, body: { date: '2026-10-14', name: 'Ride', kcal: 300, external_id: 'strava:1' } });
+  const ride = { date: '2026-10-14', name: 'Ride', kcal: 300, external_id: 'strava:1' };
+  const created = await call('/api/v1/activity', { method: 'POST', token, body: ride });
+  // Updates before any edit go through.
+  assert.equal((await call('/api/v1/activity', { method: 'POST', token, body: { ...ride, kcal: 310 } })).body.status, 'updated');
   const put = await call(`/api/activity/${created.body.activity_id}`, { method: 'PUT', cookie, body: { kcal: 320 } });
   assert.equal(put.body.source, 'external');
   assert.equal(put.body.external_id, 'strava:1');
-  assert.equal(put.body.user_edited_at, null);
-  const again = await call('/api/v1/activity', { method: 'POST', token, body: { date: '2026-10-14', name: 'Ride', kcal: 330, external_id: 'strava:1' } });
-  assert.equal(again.body.status, 'updated');
+  assert.ok(put.body.user_edited_at);
+  const again = await call('/api/v1/activity', { method: 'POST', token, body: { ...ride, kcal: 330 } });
+  assert.equal(again.body.status, 'user_edited');
+  const batch = await call('/api/v1/activity/batch', { method: 'POST', token, body: { items: [{ ...ride, kcal: 340 }] } });
+  assert.equal(batch.body.results[0].status, 'user_edited');
+  assert.equal(rowsFor(user, 'strava:1')[0].kcal, 320);
   assert.equal(rowsFor(user, 'strava:1').length, 1);
+});
+
+test('a delete from the integration removes the row even after the person edited it', async () => {
+  const user = newUser();
+  const token = pat(user);
+  const cookie = auth.signToken(user);
+  for (const body of [workout({ external_id: 'og:w:edited-then-gone' }), { date: '2026-10-14', name: 'Ride', kcal: 300, external_id: 'strava:gone' }]) {
+    const created = await call('/api/v1/activity', { method: 'POST', token, body });
+    await call(`/api/activity/${created.body.activity_id}`, { method: 'PUT', cookie, body: { kcal: 999 } });
+    assert.ok(rowsFor(user, body.external_id)[0].user_edited_at, 'edited first');
+    const del = await call(`/api/v1/activity/external/${body.external_id}`, { method: 'DELETE', token });
+    assert.equal(del.body.deleted, true, body.external_id);
+    assert.ok(rowsFor(user, body.external_id)[0].deleted_at);
+    // And it stays gone: the row is still the person's.
+    assert.equal((await call('/api/v1/activity', { method: 'POST', token, body })).body.status, 'user_edited');
+  }
+  const viaBatch = await call('/api/v1/activity', { method: 'POST', token, body: workout({ external_id: 'og:w:batch-gone' }) });
+  await call(`/api/activity/${viaBatch.body.activity_id}`, { method: 'PUT', cookie, body: { kcal: 5 } });
+  const batch = await call('/api/v1/activity/batch', { method: 'POST', token, body: { items: [{ op: 'delete', external_id: 'og:w:batch-gone' }] } });
+  assert.equal(batch.body.results[0].status, 'deleted');
 });
 
 test('an integration row without a key keeps its source through an app edit', async () => {
@@ -364,17 +405,18 @@ test('an integration row without a key keeps its source through an app edit', as
   assert.equal(put.body.source, 'opengym', 'still a bridge row, still covered on a wearable day');
 });
 
-test('"Clear all data" counts as deleting the bridge rows: the bridge does not bring them back', async () => {
+test('"Clear all data" counts as deleting every integration row: no integration brings them back', async () => {
   const user = newUser();
   const token = pat(user);
   const cookie = auth.signToken(user);
+  const ride = { date: '2026-10-14', name: 'Ride', kcal: 300, external_id: 'strava:9' };
   await call('/api/v1/activity', { method: 'POST', token, body: workout() });
-  await call('/api/v1/activity', { method: 'POST', token, body: { date: '2026-10-14', name: 'Ride', kcal: 300, external_id: 'strava:9' } });
+  await call('/api/v1/activity', { method: 'POST', token, body: ride });
   assert.equal((await call('/api/data', { method: 'DELETE', cookie })).status, 200);
   assert.equal((await call('/api/v1/activity', { method: 'POST', token, body: workout() })).body.status, 'user_edited');
+  assert.equal((await call('/api/v1/activity', { method: 'POST', token, body: ride })).body.status, 'user_edited');
   assert.ok(rowsFor(user, 'og:w:lq2k9x7a1b')[0].deleted_at);
-  // Other integrations keep their upstream behaviour.
-  assert.equal(rowsFor(user, 'strava:9')[0].user_edited_at, null);
+  assert.ok(rowsFor(user, 'strava:9')[0].deleted_at);
 });
 
 test('claiming anonymous data: an account row with the same key wins, the claim does not fail', () => {
@@ -464,6 +506,85 @@ test('body-stats polling: updated_since is inclusive, oldest change first, and s
   assert.deepEqual(later.body.items.map(i => i.date), ['2026-10-13', '2026-10-09'], 'milliseconds round down, so the bound stays inclusive');
   const ranged = await call('/api/v1/body-stats?updated_since=2026-10-14T00:00:00Z&from=2026-10-10&to=2026-10-11', { token });
   assert.deepEqual(ranged.body.items.map(i => i.date), ['2026-10-11', '2026-10-10']);
+});
+
+const decodeCursor = c => JSON.parse(Buffer.from(c, 'base64url').toString('utf8'));
+const pollAll = async (token, start, limit, maxRounds) => {
+  const seen = [];
+  let query = `updated_since=${encodeURIComponent(start)}`;
+  for (let round = 1; round <= maxRounds; round++) {
+    const r = await call(`/api/v1/body-stats?${query}&limit=${limit}`, { token });
+    assert.equal(r.status, 200);
+    seen.push(...r.body.items);
+    if (!r.body.has_more) return { seen, rounds: round, last: r.body };
+    query = `cursor=${r.body.next_cursor}`;
+  }
+  assert.fail(`polling did not finish in ${maxRounds} rounds`);
+};
+
+test('body-stats polling pages through any number of rows sharing one second (keyset cursor)', async () => {
+  const user = newUser();
+  const token = pat(user);
+  for (let d = 1; d <= 9; d++) setDiary(user, `2025-03-0${d}`, { weight: 70 + d, weight_unit: 'kg' }, '2025-03-10 12:00:00');
+  const { seen, rounds } = await pollAll(token, '2025-03-10T00:00:00Z', 2, 10);
+  assert.deepEqual(seen.map(i => i.date), Array.from({ length: 9 }, (_, i) => `2025-03-0${i + 1}`), 'every row once, in date order');
+  assert.equal(rounds, 5);
+});
+
+test('body-stats polling after "Clear all data" on 300 days sees every removal (review repro)', async () => {
+  const user = newUser();
+  const token = pat(user);
+  const cookie = auth.signToken(user);
+  const dates = Array.from({ length: 300 }, (_, i) => new Date(Date.UTC(2025, 0, 1 + i)).toISOString().slice(0, 10));
+  for (const d of dates) setDiary(user, d, { weight: 80, weight_unit: 'kg' }, '2026-01-01 00:00:00');
+  const start = '2026-01-02T00:00:00Z';
+  assert.equal((await call('/api/data', { method: 'DELETE', cookie })).status, 200);   // every day stamped in one second
+
+  await new Promise(r => setTimeout(r, 1100));   // that second is over
+  const { seen, rounds } = await pollAll(token, start, 200, 5);
+  assert.equal(rounds, 2);
+  assert.equal(new Set(seen.map(i => i.date)).size, 300, 'all 300 removals seen');
+  assert.ok(seen.every(i => i.weight_kg === null));
+});
+
+test('body-stats polling: the cursor never moves into the current second or later', async () => {
+  const user = newUser();
+  const token = pat(user);
+  setDiary(user, '2025-05-01', { weight: 70, weight_unit: 'kg' }, '2025-05-02 00:00:00');
+  // A row the clock has not passed yet: a write can still land in its
+  // second under an earlier date, so the cursor stops before it and the
+  // row comes again.
+  setDiary(user, '2025-04-30', { weight: 71, weight_unit: 'kg' }, '2999-01-01 00:00:00');
+  for (let i = 0; i < 2; i++) {
+    const r = await call('/api/v1/body-stats?updated_since=2025-05-01T00:00:00Z', { token });
+    assert.deepEqual(r.body.items.map(x => x.date), ['2025-05-01', '2025-04-30']);
+    assert.deepEqual(decodeCursor(r.body.next_cursor), { u: '2025-05-02 00:00:00', d: '2025-05-01' });
+    const next = await call(`/api/v1/body-stats?cursor=${r.body.next_cursor}`, { token });
+    assert.deepEqual(next.body.items.map(x => x.date), ['2025-04-30'], 'comes again');
+  }
+  // More such rows than the limit: has_more stays false, so a poller
+  // waits for its next round instead of spinning on the same page.
+  setDiary(user, '2025-04-29', { weight: 72, weight_unit: 'kg' }, '2999-01-01 00:00:00');
+  const held = await call('/api/v1/body-stats?updated_since=2025-05-02T00:00:01Z&limit=1', { token });
+  assert.equal(held.body.items.length, 1);
+  assert.equal(held.body.total, 2);
+  assert.equal(held.body.has_more, false);
+  assert.deepEqual(decodeCursor(held.body.next_cursor), { u: '2025-05-02 00:00:01', d: '' });
+});
+
+test('body-stats polling: cursor errors', async () => {
+  const token = pat(newUser());
+  const bad = async (q, code) => {
+    const r = await call(`/api/v1/body-stats?${q}`, { token });
+    assert.equal(r.status, 400, q);
+    assert.equal(r.body.code, code, q);
+  };
+  const cursor = Buffer.from(JSON.stringify({ u: '2026-01-01 00:00:00', d: '2025-01-01' })).toString('base64url');
+  await bad('cursor=not-a-cursor', 'bad_cursor');
+  await bad(`cursor=${Buffer.from(JSON.stringify({ u: 'yesterday', d: '' })).toString('base64url')}`, 'bad_cursor');
+  await bad(`cursor=${cursor}&updated_since=2026-01-01T00:00:00Z`, 'bad_cursor');
+  await bad(`cursor=${cursor}&offset=5`, 'bad_offset');
+  assert.equal((await call(`/api/v1/body-stats?cursor=${cursor}`, { token })).status, 200);
 });
 
 // ── Body measurements (P4) ────────────────────────────────────────────────
@@ -599,33 +720,50 @@ test("migration: 'external:<id>' keys move to external_id and duplicates fold be
   try {
     // An upstream database: the full schema, then the two new columns and
     // the index taken off again, with rows as the old route wrote them.
-    run(`
+    const lastLine = out => out.split('\n').at(-1);
+    const before = JSON.parse(lastLine(run(`
       const db = (await import(${JSON.stringify(dbUrl)})).default;
       db.exec('DROP INDEX idx_activity_external');
       db.exec('ALTER TABLE activity_log DROP COLUMN external_id');
       db.exec('ALTER TABLE activity_log DROP COLUMN user_edited_at');
       const u = Number(db.prepare("INSERT INTO users (username, password_hash, role) VALUES ('m', 'x', 'user')").run().lastInsertRowid);
-      const add = (source, deleted) => db.prepare("INSERT INTO activity_log (user_id, date, name, kcal, source, deleted_at) VALUES (?, '2026-10-14', 'x', 1, ?, ?)").run(u, source, deleted);
-      add('external:og:w:a', null);
-      add('external:og:w:a', '2026-10-01 00:00:00');
-      add('external:og:w:a', null);
-      add('external:og:w:b', '2026-10-01 00:00:00');
-      add('external', null);
-      add('manual_form', null);
+      const add = (owner, date, source, deleted, updated) => db.prepare(
+        "INSERT INTO activity_log (user_id, date, name, kcal, source, deleted_at, updated_at) VALUES (?, ?, 'x', 1, ?, ?, ?)"
+      ).run(owner, date, source, deleted, updated);
+      const t = '2026-10-10 00:00:00';
+      add(u, '2026-10-09', 'external:og:w:a', null, t);                    // 1 the later day, the lower id
+      add(u, '2026-10-05', 'external:og:w:a', '2026-10-06 00:00:00', t);   // 2 deleted
+      add(u, '2026-10-02', 'external:og:w:a', null, t);                    // 3 the earlier day, a copy
+      add(u, '2026-10-01', 'external:og:w:b', '2026-10-01 00:00:00', '2026-10-01 00:00:00'); // 4
+      add(u, '2026-10-02', 'external:og:w:b', '2026-10-05 00:00:00', '2026-10-05 00:00:00'); // 5 deleted last
+      add(u, '2026-10-14', 'external', null, t);                           // 6
+      add(u, '2026-10-14', 'manual_form', null, t);                        // 7
+      add(null, '2026-10-14', 'external:og:w:c', null, t);                 // 8 single-user
+      add(null, '2026-10-13', 'external:og:w:c', null, t);                 // 9
+      // The row the old upsert updated for each key (its exact lookup).
+      const found = (owner, key) => (owner == null
+        ? db.prepare('SELECT id FROM activity_log WHERE user_id IS NULL AND source = ? AND deleted_at IS NULL').get(key)
+        : db.prepare('SELECT id FROM activity_log WHERE user_id = ? AND source = ? AND deleted_at IS NULL').get(owner, key)).id;
+      console.log(JSON.stringify({ a: found(u, 'external:og:w:a'), c: found(null, 'external:og:w:c') }));
       db.close();
-    `);
+    `)));
     const out = run(`
       const db = (await import(${JSON.stringify(dbUrl)})).default;
       console.log(JSON.stringify(db.prepare('SELECT id, source, external_id, deleted_at IS NOT NULL AS deleted FROM activity_log ORDER BY id').all()));
       db.close();
     `);
-    assert.deepEqual(JSON.parse(out), [
-      { id: 1, source: 'external', external_id: null, deleted: 1 },     // live duplicate: folded
-      { id: 2, source: 'external', external_id: null, deleted: 1 },     // deleted duplicate: loses the key
-      { id: 3, source: 'external', external_id: 'og:w:a', deleted: 0 }, // highest live id keeps it
-      { id: 4, source: 'external', external_id: 'og:w:b', deleted: 1 },
-      { id: 5, source: 'external', external_id: null, deleted: 0 },
-      { id: 6, source: 'manual_form', external_id: null, deleted: 0 },
+    assert.match(out, /folded 4 duplicate row\(s\)/, 'the fold is logged');
+    assert.deepEqual(before, { a: 1, c: 8 }, 'the old lookup resolved the lowest live id');
+    assert.deepEqual(JSON.parse(lastLine(out)), [
+      { id: 1, source: 'external', external_id: 'og:w:a', deleted: 0 }, // the row the old code kept updating
+      { id: 2, source: 'external', external_id: null, deleted: 1 },
+      { id: 3, source: 'external', external_id: null, deleted: 1 },     // the copy on another day: folded
+      { id: 4, source: 'external', external_id: null, deleted: 1 },
+      { id: 5, source: 'external', external_id: 'og:w:b', deleted: 1 }, // no live row: the last changed keeps it
+      { id: 6, source: 'external', external_id: null, deleted: 0 },
+      { id: 7, source: 'manual_form', external_id: null, deleted: 0 },
+      { id: 8, source: 'external', external_id: 'og:w:c', deleted: 0 },
+      { id: 9, source: 'external', external_id: null, deleted: 1 },
     ]);
   } finally {
     rmSync(migDir, { recursive: true, force: true });
@@ -633,7 +771,7 @@ test("migration: 'external:<id>' keys move to external_id and duplicates fold be
 });
 
 // Last: a restore replaces the whole database.
-test('restoring an older backup keeps the live row of a key that also has a deleted twin', async () => {
+test('restoring an older backup keeps the row each key resolved to, as the migration does', async () => {
   const admin = newUser();
   db.prepare(`UPDATE users SET role = 'admin' WHERE id = ?`).run(admin.id);
   const cookie = auth.signToken({ ...admin, role: 'admin' });
@@ -651,6 +789,8 @@ test('restoring an older backup keeps the live row of a key that also has a dele
     { ...old, id: 900001, kcal: 190, source: 'external:og:w:twin', deleted_at: '2026-10-14 09:00:00' },
     { ...old, id: 900002, kcal: 210, source: 'external:og:w:twin', deleted_at: null },
     { ...old, id: 900003, kcal: 50, source: 'external:og:w:solo', deleted_at: null },
+    { ...old, id: 900004, date: '2026-10-15', kcal: 60, source: 'external:og:w:pair', deleted_at: null },
+    { ...old, id: 900005, date: '2026-10-12', kcal: 60, source: 'external:og:w:pair', deleted_at: null },
   ];
   zip.updateFile('database.json', Buffer.from(JSON.stringify(data)));
   zip.writeZip(join(backups, 'nutritrace-backup-legacy.zip'));
@@ -663,6 +803,8 @@ test('restoring an older backup keeps the live row of a key that also has a dele
       { id: 900001, source: 'external', external_id: null, deleted: 1 },
       { id: 900002, source: 'external', external_id: 'og:w:twin', deleted: 0 },
       { id: 900003, source: 'external', external_id: 'og:w:solo', deleted: 0 },
+      { id: 900004, source: 'external', external_id: 'og:w:pair', deleted: 0 }, // the lowest live id
+      { id: 900005, source: 'external', external_id: null, deleted: 1 },
     ],
   );
 });
