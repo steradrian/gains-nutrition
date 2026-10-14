@@ -193,9 +193,11 @@ function restoreFromZip(zip) {
 
   db.transaction(() => {
     // Read before DELETE FROM users cascades them away; see the hub links below.
+    // The current links carry their account's username, to check against
+    // the account the restore puts under that id.
     const hubLinks = Array.isArray(data.user_hub_links)
-      ? data.user_hub_links
-      : db.prepare('SELECT * FROM user_hub_links').all();
+      ? data.user_hub_links.map(l => ({ ...l, username: null }))
+      : db.prepare('SELECT l.id, l.user_id, l.issuer, l.sub, l.created_at, u.username FROM user_hub_links l JOIN users u ON u.id = l.user_id').all();
     db.prepare('DELETE FROM password_reset_tokens').run();
     db.prepare('DELETE FROM invite_tokens').run();
     db.prepare('DELETE FROM food_shares').run();
@@ -378,14 +380,23 @@ function restoreFromZip(zip) {
     // new, empty account on their next request. A backup with the key
     // replaces them; one made before they existed (no key) keeps the
     // current ones. Either way only links to an account the restore brought
-    // back are kept.
+    // back are kept. A kept current link also needs the restored account
+    // under its user_id to have the username it had here: ids are just row
+    // numbers, and in another instance's backup the same id can be a
+    // different person, who must not receive this hub user's requests.
     db.prepare('DELETE FROM user_hub_links').run();
     const insHubLink = db.prepare(`
       INSERT OR IGNORE INTO user_hub_links (id, user_id, issuer, sub, created_at)
       SELECT @id, @user_id, @issuer, @sub, @created_at
-       WHERE EXISTS (SELECT 1 FROM users WHERE id = @user_id)
+       WHERE EXISTS (SELECT 1 FROM users WHERE id = @user_id AND (@username IS NULL OR username = @username))
     `);
-    for (const l of hubLinks) insHubLink.run({ created_at: null, ...l });
+    let droppedLinks = 0;
+    for (const l of hubLinks) {
+      if (insHubLink.run({ created_at: null, ...l }).changes === 0) droppedLinks++;
+    }
+    if (droppedLinks) {
+      logger.warn(`[full-backup] restore dropped ${droppedLinks} hub link(s) whose account is not in the backup under the same id and username; those hub users get a new account on their next request`);
+    }
 
     // Federation API tokens — token_hash is opaque SHA-256, users can't
     // regenerate the same token. Preserving these across restore keeps

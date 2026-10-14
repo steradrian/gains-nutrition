@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import db from '../db.js';
 import { logger } from '../logger.js';
-import { headerCarriesHubToken, hubBearer, hubConfig, hubInstance, hubLinkCount, hubMode } from '../lib/hub-auth.js';
+import { headerCarriesHubToken, hubBearer, hubConfig, hubInstance, hubLinkCount, hubMode, replayCacheRetryAfter } from '../lib/hub-auth.js';
 
 // A broken HUB_JWKS / HUB_ISSUER must stop the server, not quietly turn the
 // hub's path off (the hub's requests would then be anonymous).
@@ -109,6 +109,12 @@ export function authenticate(req, res, next) {
   if (hub.kind === 'none' && headerCarriesHubToken(auth)) hub = { kind: 'invalid', reason: 'header' };
   if (hub.kind === 'invalid') {
     logger.warn(`[auth] refused a hub token (${hub.reason}) on ${req.method} ${req.path}`);
+    // Not the token's fault: the replay cache is full and fails closed.
+    // The hub retries later with a fresh token.
+    if (hub.reason === 'replay_cache_full') {
+      res.set('Retry-After', String(replayCacheRetryAfter()));
+      return res.status(503).json({ error: 'Too many hub tokens in flight; retry shortly', code: 'hub_replay_cache_full' });
+    }
     return res.status(401).json({ error: 'Invalid hub token', code: 'hub_token_invalid' });
   }
   if (hub.kind === 'ok') {

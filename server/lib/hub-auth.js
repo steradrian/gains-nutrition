@@ -24,8 +24,10 @@
  *   - jti is base64url with at least 128 bits and is seen once, which is
  *     what stops a replay, re-signed twin included: the hub mints a token
  *     per request (and per retry), so a jti seen again is refused. The
- *     cache is in memory and keeps an entry until 30 s past its exp (at
- *     most 120 s), so a clock stepped back by up to 30 s does not reopen it;
+ *     cache is in memory (a restart forgets it) and keeps an entry until
+ *     30 s past its exp (at most 120 s), so a clock stepped back by up to
+ *     30 s does not reopen it. Full, it refuses new tokens (503) rather
+ *     than forget one;
  *   - a token that looks like a hub token and fails any check is refused,
  *     it never falls through to another way of signing in;
  *   - the token is never logged.
@@ -63,27 +65,45 @@ const isCanonicalBase64url = segment => Buffer.from(segment, 'base64url').toStri
 
 // jti -> when the entry may go (seconds): the token's exp plus the clock
 // skew. Insertion order is close to that order (every token lives at most
-// 60 s), so stale entries are trimmed from the front. Over the cap the
-// oldest entry goes first, which reopens that token for the rest of its
-// life, so it is logged.
+// 60 s), so stale entries are trimmed from the front.
+//
+// Full (REPLAY_CACHE_MAX live entries), it fails closed: a new token is
+// refused (503 with Retry-After, middleware/auth.js) until the oldest entry
+// expires. Evicting instead would let whoever fills the cache push out a
+// token's jti and replay it.
+//
+// In memory only: a restart forgets every jti, so a token captured before
+// a restart could be replayed after it, until its exp. Accepted because a
+// hub token lives at most 60 s.
 const _seenJti = new Map();
+let _replayCacheMax = REPLAY_CACHE_MAX;
 
+// 'fresh', 'replay', or 'full'.
 function _replayed(jti, exp, nowS) {
   for (const [seen, until] of _seenJti) {
     if (until > nowS) break;
     _seenJti.delete(seen);
   }
-  if (_seenJti.has(jti)) return true;
-  if (_seenJti.size >= REPLAY_CACHE_MAX) {
-    _seenJti.delete(_seenJti.keys().next().value);
-    logger.warn(`[auth] hub token replay cache is full (${REPLAY_CACHE_MAX}); dropped its oldest entry`);
+  if (_seenJti.has(jti)) return 'replay';
+  if (_seenJti.size >= _replayCacheMax) {
+    logger.warn(`[auth] hub token replay cache is full (${_replayCacheMax}); refusing new hub tokens until entries expire`);
+    return 'full';
   }
   _seenJti.set(jti, exp + CLOCK_SKEW_S);
-  return false;
+  return 'fresh';
+}
+
+/** Seconds until the replay cache has room again (the oldest entry goes), at least 1. */
+export function replayCacheRetryAfter(nowS = Math.floor(Date.now() / 1000)) {
+  const oldest = _seenJti.values().next().value;
+  return Math.max(1, (oldest ?? nowS) - nowS + 1);
 }
 
 /** How many jti values the replay cache holds (for the tests). */
 export const replayCacheSize = () => _seenJti.size;
+
+/** Tests only: a smaller cap, so filling the cache does not take 100k tokens. */
+export function setReplayCacheMaxForTests(max) { _replayCacheMax = max ?? REPLAY_CACHE_MAX; }
 
 /** True when the hub-token path is on (HUB_JWKS set). */
 export function hubMode(env = process.env) {
@@ -204,7 +224,9 @@ export function verifyHubToken(token, config, nowS = Math.floor(Date.now() / 100
   if (!SCOPES.has(claims.scope)) return fail('scope');
   if (typeof claims.jti !== 'string' || !JTI_RE.test(claims.jti)) return fail('jti');
   // Last, so only a token that passed everything else takes a cache slot.
-  if (_replayed(claims.jti, exp, nowS)) return fail('replay');
+  const seen = _replayed(claims.jti, exp, nowS);
+  if (seen === 'replay') return fail('replay');
+  if (seen === 'full') return fail('replay_cache_full');
   return { ok: true, claims };
 }
 

@@ -75,20 +75,56 @@ export function bearerAuth(req, res, next) {
   return _admit(req, res, next, lookup, RATE_LIMIT_PER_MIN);
 }
 
+function _limited(res, bucket) {
+  const retry = Math.ceil((bucket.resetAt - Date.now()) / 1000);
+  res.set('Retry-After', String(retry));
+  return res.status(429).json({ error: 'Rate limited', code: 'rate_limited' });
+}
+
 function _admit(req, res, next, lookup, limit) {
   const bucket = _take(lookup.token.id, limit);
   res.set('X-RateLimit-Limit', String(limit));
   res.set('X-RateLimit-Remaining', String(bucket.remaining));
   res.set('X-RateLimit-Reset', String(Math.floor(bucket.resetAt / 1000)));
-  if (bucket.over) {
-    const retry = Math.ceil((bucket.resetAt - Date.now()) / 1000);
-    res.set('Retry-After', String(retry));
-    return res.status(429).json({ error: 'Rate limited', code: 'rate_limited' });
-  }
+  if (bucket.over) return _limited(res, bucket);
 
   req.apiToken = lookup.token;
   req.apiUser = lookup.user;
+  req.rateLimit = { key: lookup.token.id, limit };
   next();
+}
+
+/**
+ * Make a request cost `cost` units of its token's rate limit in all, the
+ * one bearerAuth already took included: a batch costs one per item, so a
+ * batch of 100 is not one request's worth of writes. All or nothing: when
+ * the rest does not fit in what is left this window, nothing more is spent
+ * and the request gets 429 with Retry-After. A cost above the whole limit
+ * can never fit and gets 400 batch_over_rate_limit. Returns true when the
+ * handler may go on; false when it must return without writing.
+ */
+export function chargeRateLimit(req, res, cost) {
+  const extra = cost - 1;
+  if (!req.rateLimit || extra <= 0) return true;
+  const { key, limit } = req.rateLimit;
+  if (cost > limit) {
+    res.status(400).json({ error: `this token may make ${limit} writes a minute; send at most ${limit} items per batch`, code: 'batch_over_rate_limit' });
+    return false;
+  }
+  const now = Date.now();
+  let b = _buckets.get(key);
+  if (!b || now >= b.resetAt) {
+    // The window turned over since bearerAuth counted the request.
+    b = { count: 0, resetAt: now + WINDOW_MS };
+    _buckets.set(key, b);
+  }
+  if (b.count + extra > limit) {
+    _limited(res, b);
+    return false;
+  }
+  b.count += extra;
+  res.set('X-RateLimit-Remaining', String(Math.max(0, limit - b.count)));
+  return true;
 }
 
 /**

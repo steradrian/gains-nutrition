@@ -953,6 +953,12 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_diary_deleted ON diary(deleted_at);
 `);
 
+// GET /api/v1/body-stats polling: one user's diary rows after a keyset
+// position on (updated_at, date), oldest first. The route compares
+// datetime(updated_at), which reads any stored spelling of the time the
+// same way, so the index holds that expression rather than the column.
+db.exec(`CREATE INDEX IF NOT EXISTS idx_diary_user_changed ON diary(user_id, datetime(updated_at), date)`);
+
 // ── OIDC providers: split auto_register into auto_link_verified_email +
 //    auto_register_new_users (rc.12). Existing rows keep their old behavior
 //    by copying auto_register into both new columns.

@@ -182,22 +182,39 @@ test('validation: bad fields are 400 with a stable code', async () => {
   assert.equal((await post(workout({ external_id: { a: 1 } }))).body.code, 'bad_external_id');
 });
 
-test('an external_id over 128 characters is cut to 128, as before the key column, never refused', async () => {
+test('a new external_id over 128 characters is refused: cutting it could make two keys one', async () => {
   const user = newUser();
   const token = pat(user);
-  const long = `og:w:${'x'.repeat(200)}`;
-  const first = await call('/api/v1/activity', { method: 'POST', token, body: workout({ external_id: long }) });
-  assert.equal(first.status, 201);
-  const again = await call('/api/v1/activity', { method: 'POST', token, body: workout({ external_id: long, kcal: 200 }) });
+  const a = `og:w:${'x'.repeat(200)}`;
+  const b = `og:w:${'x'.repeat(199)}y`; // the same first 128 characters
+  const refused = await call('/api/v1/activity', { method: 'POST', token, body: workout({ external_id: a }) });
+  assert.equal(refused.status, 400);
+  assert.equal(refused.body.code, 'external_id_too_long');
+  const batch = await call('/api/v1/activity/batch', { method: 'POST', token, body: { items: [workout({ external_id: b })] } });
+  assert.deepEqual([batch.body.results[0].status, batch.body.results[0].code], ['error', 'external_id_too_long']);
+  assert.equal(rowsFor(user, a.slice(0, 128)).length, 0, 'nothing written');
+  // Exactly 128 is fine.
+  assert.equal((await call('/api/v1/activity', { method: 'POST', token, body: workout({ external_id: a.slice(0, 128) }) })).status, 201);
+});
+
+test('a long external_id whose cut form names a legacy row keeps reaching that row', async () => {
+  const user = newUser();
+  const token = pat(user);
+  const long = `og:w:${'z'.repeat(200)}`;
+  // A row from before the refusal, stored under the cut key.
+  const legacyId = Number(db.prepare(
+    `INSERT INTO activity_log (user_id, date, name, kcal, source, external_id) VALUES (?, '2026-10-14', 'Legacy', 100, 'external', ?)`
+  ).run(user.id, long.slice(0, 128)).lastInsertRowid);
+  const again = await call('/api/v1/activity', { method: 'POST', token, body: workout({ external_id: long, kcal: 200, source: undefined }) });
   assert.equal(again.body.status, 'updated', 'the same long id finds its row');
-  assert.equal(again.body.activity_id, first.body.activity_id);
+  assert.equal(again.body.activity_id, legacyId);
+  const batch = await call('/api/v1/activity/batch', { method: 'POST', token, body: { items: [workout({ external_id: long, kcal: 210, source: undefined })] } });
+  assert.deepEqual([batch.body.results[0].status, batch.body.results[0].external_id], ['updated', long.slice(0, 128)]);
   const rows = rowsFor(user, long.slice(0, 128));
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].external_id.length, 128);
+  assert.equal(rows[0].kcal, 210);
   const del = await call(`/api/v1/activity/external/${long}`, { method: 'DELETE', token });
   assert.equal(del.body.deleted, true, 'DELETE cuts the key the same way');
-  const batch = await call('/api/v1/activity/batch', { method: 'POST', token, body: { items: [workout({ external_id: long })] } });
-  assert.deepEqual([batch.body.results[0].status, batch.body.results[0].external_id], ['created', long.slice(0, 128)]);
 });
 
 // ── Batch ─────────────────────────────────────────────────────────────────
@@ -209,9 +226,13 @@ test(`batch: at most ${BATCH_MAX_ITEMS} items, and the body must be { items: [] 
   assert.equal(over.body.code, 'too_many_items');
   assert.equal((await call('/api/v1/activity/batch', { method: 'POST', token, body: { items: 'x' } })).body.code, 'bad_body');
   assert.equal((await call('/api/v1/activity/batch', { method: 'POST', token, body: {} })).body.code, 'bad_body');
-  const full = await call('/api/v1/activity/batch', { method: 'POST', token, body: { items: items(BATCH_MAX_ITEMS) } });
+  // Each item spends one unit of the token's rate limit (60 a minute for a
+  // personal token by default), so a full batch takes a token that may
+  // make that many writes: the hub's sync token (bridge-hardening.test.js)
+  // or a fresh personal token at its own limit.
+  const full = await call('/api/v1/activity/batch', { method: 'POST', token: pat(newUser()), body: { items: items(60) } });
   assert.equal(full.status, 200);
-  assert.equal(full.body.results.length, BATCH_MAX_ITEMS);
+  assert.equal(full.body.results.length, 60);
   assert.ok(full.body.results.every(r => r.status === 'created'));
 });
 

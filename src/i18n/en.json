@@ -758,6 +758,8 @@
       "estimated_short": "est.",
       "wellness_hint": "Synced workouts from your device live in Wellness",
       "not_counted": "not counted — using wearable",
+      "covered_by": "covered by {device}",
+      "covered_by_hint": "Your wearable already counts this workout's calories today, so this entry is shown but not counted.",
       "policy_chip": "Policy: wearable wins. Toggle in Settings → Diary.",
       "save_as_template": "Save as template",
       "save_as_template_hint": "(pinned in the picker next time)",

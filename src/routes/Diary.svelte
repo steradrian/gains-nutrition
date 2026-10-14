@@ -66,6 +66,7 @@
   import { portal } from '../lib/portal.js';
   import { Nutrition, NUTRIMENTS } from '../lib/nutrition.js';
   import { readBodyStat, tagBodyStats, LENGTH_KEYS } from '../lib/body-stats-unit.js';
+  import { activityCounts, deviceLabel } from '../lib/activity-counting.js';
   import { decimalInput, parseDecimal } from '../lib/decimal-input.js';
   import { pageScrollTop } from '../lib/scroll-anchor.js';
   import { focusDefaultField } from '../lib/default-field.js';
@@ -2412,7 +2413,8 @@
       {@const sum  = $activitySummary || { manual: 0, wearable: 0, effective: 0, policy: 'wearable_wins' }}
       {@const policy = $manualActivityPolicy || 'wearable_wins'}
       {@const wearablePresent = (sum.wearable || 0) > 0}
-      {@const manualCounted   = !wearablePresent || policy !== 'wearable_wins'}
+      {@const countCtx = { wearablePresent, policy }}
+      {@const noneCounted = acts.length > 0 && acts.every(a => !activityCounts(a, countCtx))}
       {@const totalActKcal = acts.reduce((s, a) => s + (a.kcal || 0), 0)}
       <section class="meal-group card activity-group" id="activity-group" in:fly={{ y: 18, duration: _isInitialMount && !$disableAnimations ? 280 : 0, delay: _isInitialMount && !$disableAnimations ? 60 + meals.length * 55 : 0 }}>
         <div class="meal-header" style="--meal-color:#4FFFB0">
@@ -2443,7 +2445,7 @@
                   <div class="item-info">
                     <span class="item-name truncate">{a.name}</span>
                     <span class="item-meta text-3 text-sm">
-                      {#if a.duration_min}{a.duration_min} min{/if}{#if a.duration_min && a.distance} | {/if}{#if a.distance}{@const _dStr = String(a.distance).trim()}{_dStr}{#if /^\d+(\.\d+)?$/.test(_dStr)} {$distUnit || 'mi'}{/if}{/if}{#if (a.duration_min || a.distance)} | {/if}<span style="color:#4FFFB0">−{_aEnergy.value.toLocaleString()} {_aEnergy.unit}</span>{#if a.source === 'ai_estimated'} | <span class="text-3" title="Estimated by Trace">{$_('diary.activity.estimated_short')}</span>{/if}
+                      {#if a.duration_min}{a.duration_min} min{/if}{#if a.duration_min && a.distance} | {/if}{#if a.distance}{@const _dStr = String(a.distance).trim()}{_dStr}{#if /^\d+(\.\d+)?$/.test(_dStr)} {$distUnit || 'mi'}{/if}{/if}{#if (a.duration_min || a.distance)} | {/if}<span style="color:#4FFFB0">−{_aEnergy.value.toLocaleString()} {_aEnergy.unit}</span>{#if a.source === 'ai_estimated'} | <span class="text-3" title="Estimated by Trace">{$_('diary.activity.estimated_short')}</span>{/if}{#if a.covered_by} | <span class="text-3" title={$_('diary.activity.covered_by_hint')}>{$_('diary.activity.covered_by', { values: { device: deviceLabel(a.covered_by) } })}</span>{/if}
                     </span>
                   </div>
                 </button>
@@ -2464,8 +2466,8 @@
             </div>
             <span class="meal-macro-text text-3 text-sm">
               <span style="color:#4FFFB0">−{_totActEnergy.value.toLocaleString()} {_totActEnergy.unit}</span>
-              {#if wearablePresent && !manualCounted}
-                · <span title={$_('diary.activity.policy_chip')}>{$_('diary.activity.not_counted')}</span>
+              {#if noneCounted}
+                · <span title={$_(policy === 'wearable_wins' ? 'diary.activity.policy_chip' : 'diary.activity.covered_by_hint')}>{$_('diary.activity.not_counted')}</span>
               {/if}
             </span>
           </div>

@@ -42,15 +42,19 @@ import { hubInstance } from './hub-auth.js';
 // category, barcode, units or photo. userId null (user management off)
 // reads everything, as the routes do. Unowned single-user rows are anyone's,
 // except on a hub instance, where they are nobody's until the owner claims
-// them (lib/sharing.js canRead, the same rule). One query each, not one per
-// row.
-const readableMeal = anyoneNull => `(${anyoneNull ? 'm.user_id IS NULL OR ' : ''}m.user_id = @u OR m.visibility = 'group'
-  OR (m.visibility = 'specific' AND EXISTS (SELECT 1 FROM meal_shares ms WHERE ms.meal_id = m.id AND ms.user_id = @u)))`;
-const readableFood = anyoneNull => `(${anyoneNull ? 'f.user_id IS NULL OR ' : ''}f.user_id = @u OR f.visibility = 'group'
+// them (lib/sharing.js canRead, the same rule): there an unowned row is out
+// whatever its visibility, 'group' included, so the hub form wraps every
+// clause in an owner check. One query each, not one per row.
+const _ownerRule = (alias, anyoneNull, clauses) => (anyoneNull
+  ? `(${alias}.user_id IS NULL OR ${clauses})`
+  : `(${alias}.user_id IS NOT NULL AND (${clauses}))`);
+const readableMeal = anyoneNull => _ownerRule('m', anyoneNull, `m.user_id = @u OR m.visibility = 'group'
+  OR (m.visibility = 'specific' AND EXISTS (SELECT 1 FROM meal_shares ms WHERE ms.meal_id = m.id AND ms.user_id = @u))`);
+const readableFood = anyoneNull => _ownerRule('f', anyoneNull, `f.user_id = @u OR f.visibility = 'group'
   OR (f.visibility = 'specific' AND EXISTS (SELECT 1 FROM food_shares fs WHERE fs.food_id = f.id AND fs.user_id = @u))
   OR f.id IN (SELECT CAST(COALESCE(json_extract(j.value, '$.food_server_id'), json_extract(j.value, '$.id')) AS INTEGER)
                 FROM meals m, json_each(CASE WHEN json_valid(m.items) THEN m.items ELSE '[]' END) j
-               WHERE m.deleted_at IS NULL AND j.type = 'object' AND ${readableMeal(anyoneNull)}))`;
+               WHERE m.deleted_at IS NULL AND j.type = 'object' AND ${readableMeal(anyoneNull)})`);
 const READABLE_MEAL = readableMeal(true), READABLE_MEAL_HUB = readableMeal(false);
 const READABLE_FOOD = readableFood(true), READABLE_FOOD_HUB = readableFood(false);
 const foodScope = userId => (userId == null ? { sql: '1', args: {} }

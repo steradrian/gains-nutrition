@@ -25,9 +25,9 @@
 
 import db from '../db.js';
 import { logger } from '../logger.js';
+import { bodyStatsWeightKg, untaggedWeightUnit } from './body-weight.js';
 
 const KCAL_PER_KG = 7700;
-const LB_TO_KG = 1 / 2.20462;
 const DEFAULT_WINDOW_DAYS = 35;
 const MIN_VALID_DAYS = 21;
 
@@ -53,19 +53,6 @@ function _sumDailyIntake(itemsJson) {
     total += Number(kcal) * Number(qty);
   }
   return total > 0 ? total : null;
-}
-
-/** Read manual weight (kg) from a diary row's body_stats JSON. */
-function _bodyStatsWeightKg(bodyStatsJson) {
-  if (!bodyStatsJson) return null;
-  let bs;
-  try { bs = JSON.parse(bodyStatsJson); } catch { return null; }
-  const raw = bs?.weight;
-  if (raw == null || raw === '') return null;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  const unit = bs.weight_unit || 'kg';
-  return unit === 'lb' ? n * LB_TO_KG : n;
 }
 
 /** Linear regression on (x, y) pairs where x is the day index. Returns slope
@@ -141,10 +128,13 @@ export function computeAdaptiveTdee(userId, opts = {}) {
   // --- Build dense series, day-by-day, from windowDays ago to today ---
   const intakeByDate = new Map();
   const manualByDate = new Map();
+  // Manual weights in kg (lib/body-weight.js): an untagged legacy value in
+  // the user's weightUnit, as the diary shows it and /api/v1/body-stats reads it.
+  const untaggedUnit = untaggedWeightUnit(userId);
   for (const r of diaryRows) {
     const intake = _sumDailyIntake(r.items);
     if (intake != null) intakeByDate.set(r.date, intake);
-    const w = _bodyStatsWeightKg(r.body_stats);
+    const w = bodyStatsWeightKg(r.body_stats, untaggedUnit);
     if (w != null) manualByDate.set(r.date, w);
   }
 
