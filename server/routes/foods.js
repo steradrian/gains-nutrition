@@ -9,6 +9,7 @@ import { localizeImage, isExternalUrl } from '../lib/image-localizer.js';
 import { sendFoodShared, isEmailConfigured } from '../email.js';
 import { logger } from '../logger.js';
 import { ownerOrOptIn } from '../lib/outbound-policy.js';
+import { trustedServiceOrigins } from '../lib/service-origins.js';
 import { cleanCreateKey, findByCreateKey, setCreateKey } from '../lib/create-keys.js';
 
 const router = Router();
@@ -18,27 +19,6 @@ router.use(requireAuth);
 const uid = req => userMgmtActive() ? req.user.id : null;
 
 const canRead = (food, u) => _canRead(food, u, 'food_shares', 'food_id');
-
-/**
- * For federation-sourced imports (source_app === 'cooktrace' today), let
- * localizeImage pull from the user's own configured integration base URL
- * even when it resolves to a private/LAN IP. Without this the SSRF guard
- * silently leaves the raw private-IP URL in the food row and the image
- * slot renders empty on any client whose network can't reach that IP.
- * Only integration URLs the user themselves saved in Settings qualify.
- */
-function _trustedOriginsForSource(userId, sourceApp) {
-  if (!sourceApp) return [];
-  const key = sourceApp === 'cooktrace' ? 'cooktraceBaseUrl'
-            : sourceApp === 'mealie'    ? 'mealieBaseUrl'
-            : null;
-  if (!key) return [];
-  const row = userId == null
-    ? db.prepare(`SELECT value FROM user_settings WHERE key = ? AND deleted_at IS NULL LIMIT 1`).get(key)
-    : db.prepare(`SELECT value FROM user_settings WHERE user_id = ? AND key = ? AND deleted_at IS NULL`).get(userId, key);
-  const v = (row?.value || '').replace(/^"|"$/g, '');
-  return v ? [v] : [];
-}
 
 // ── GET / — own foods + shared foods from others ──────────────────────────
 router.get('/', wrap((req, res) => {
@@ -128,7 +108,7 @@ router.post('/', wrap(async (req, res) => {
       ? db.prepare(`SELECT * FROM foods WHERE user_id IS NULL AND source_app = ? AND source_external_id = ? AND deleted_at IS NULL`).get(cleanSourceApp, cleanSourceExtId)
       : db.prepare(`SELECT * FROM foods WHERE user_id = ?    AND source_app = ? AND source_external_id = ? AND deleted_at IS NULL`).get(u, cleanSourceApp, cleanSourceExtId);
     if (found) {
-      const trusted = _trustedOriginsForSource(u, cleanSourceApp);
+      const trusted = trustedServiceOrigins(u, cleanSourceApp);
       // Federation-sourced URLs frequently point at the source's /uploads/
       // path (e.g. "https://cooktrace.lan/uploads/xyz.png"). isExternalUrl
       // rejects any URL containing "/uploads/" as "already local", so for
@@ -173,7 +153,7 @@ router.post('/', wrap(async (req, res) => {
   // aren't blocked by the SSRF guard, and override isExternalUrl's
   // "/uploads/ means already local" heuristic so a CT-side upload URL
   // gets pulled instead of stored as a raw cross-origin link.
-  const trustedNew = _trustedOriginsForSource(u, cleanSourceApp);
+  const trustedNew = trustedServiceOrigins(u, cleanSourceApp);
   const _shouldLocalizeNew = img_url && (cleanSourceApp
     ? (img_url.startsWith('http') || img_url.startsWith('data:'))
     : isExternalUrl(img_url));

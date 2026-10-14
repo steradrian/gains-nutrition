@@ -4,11 +4,15 @@ import { wrap } from '../logger.js';
 import { requireAuth, userMgmtActive } from '../middleware/auth.js';
 import { isServerOnlyKey } from '../lib/server-only-keys.js';
 import { fetchChecked, serviceBase } from '../lib/ssrf-guard.js';
+import { homeServiceAllowed, SERVICE_OPT_IN } from '../lib/outbound-policy.js';
 
-// Push services usually live on the home network, so that's allowed for
-// every account; the address is still checked, and a redirect only
-// followed on the same server.
-const _sendPush = (url, init) => fetchChecked(url, init, { allowPrivate: true, maxRedirects: 3, sameOrigin: true });
+// Push services usually live on the home network, so that's allowed for an
+// admin (and other accounts when the owner opts them in,
+// lib/outbound-policy.js); the address is still checked, and a redirect
+// only followed on the same server.
+const _sendPush = (req, url, init) => fetchChecked(url, init, {
+  allowPrivate: homeServiceAllowed(req.user?.id), allowPrivateEnvHint: SERVICE_OPT_IN, maxRedirects: 3, sameOrigin: true,
+});
 
 // The service's own short error ("unauthorized"), never its raw reply.
 async function _pushErrorMessage(resp) {
@@ -135,7 +139,7 @@ async function _pushTestHandler(req, res) {
       const url = _s('gotifyUrl');
       const token = _s('gotifyToken');
       if (!url || !token) return res.status(400).json({ error: 'Gotify URL and token required — save settings first' });
-      resp = await _sendPush(`${serviceBase(url) ?? url}/message?token=${encodeURIComponent(token)}`, {
+      resp = await _sendPush(req, `${serviceBase(url) ?? url}/message?token=${encodeURIComponent(token)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: title || 'NutriTrace', message: message || 'Test notification — connected!', priority: priority || 5 }),
       });
@@ -146,7 +150,7 @@ async function _pushTestHandler(req, res) {
       if (!topic) return res.status(400).json({ error: 'ntfy topic required' });
       const headers = { 'Title': title || 'NutriTrace', 'Priority': String(Math.min(5, priority || 5)) };
       if (token) headers['Authorization'] = `Bearer ${token}`;
-      resp = await _sendPush(`${serviceBase(url) ?? url}/${encodeURIComponent(topic)}`, {
+      resp = await _sendPush(req, `${serviceBase(url) ?? url}/${encodeURIComponent(topic)}`, {
         method: 'POST', headers, body: message || 'Test notification — connected!',
       });
     } else if (svc === 'apprise') {
@@ -155,7 +159,7 @@ async function _pushTestHandler(req, res) {
       if (!url) return res.status(400).json({ error: 'Apprise URL required' });
       const body = { title: title || 'NutriTrace', body: message || 'Test notification — connected!', type: 'info' };
       if (tag) body.tag = tag;
-      resp = await _sendPush(`${serviceBase(url) ?? url}/notify`, {
+      resp = await _sendPush(req, `${serviceBase(url) ?? url}/notify`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       });
     } else {
