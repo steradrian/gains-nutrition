@@ -345,6 +345,18 @@ db.exec(`
     UNIQUE (oidc_provider_id, oidc_sub)
   );
   CREATE INDEX IF NOT EXISTS idx_user_oidc_links_user ON user_oidc_links(user_id);
+
+  -- Accounts reached through a hub (HUB_JWKS, see lib/hub-auth.js): one row
+  -- per (hub issuer, hub user id). Empty unless the hub is configured.
+  CREATE TABLE IF NOT EXISTS user_hub_links (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    issuer      TEXT NOT NULL,
+    sub         TEXT NOT NULL,
+    created_at  TEXT DEFAULT (datetime('now')),
+    UNIQUE (issuer, sub),
+    UNIQUE (user_id, issuer)
+  );
 `);
 
 // The rebuild below SELECTs `email` from the old users table. Fresh installs

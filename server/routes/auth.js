@@ -11,6 +11,9 @@ import { sendPasswordReset, sendInvite, isEmailConfigured } from '../email.js';
 import { estimate as estimatePasswordStrength, STRONG_MIN_SCORE } from '../lib/password-strength.js';
 import { claimAnonymousData, purgeUnreferencedUserData, purgeUserRows } from '../lib/claim-anonymous-data.js';
 import { ownerOrOptIn } from '../lib/outbound-policy.js';
+import { HUB_USERNAME_ERROR, isHubManaged, isReservedUsername } from '../lib/hub-auth.js';
+
+const HUB_MANAGED = { error: 'This account signs in through the hub; its password is managed there.', code: 'hub_managed' };
 
 const router = Router();
 
@@ -213,6 +216,7 @@ router.post('/register', wrap((req, res) => {
 
   const { username, password, full_name, nickname, birthday, gender, role, email } = req.body;
   if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+  if (isReservedUsername(username)) return res.status(400).json({ error: HUB_USERNAME_ERROR });
   { const pwErr = validatePassword(password, [username, email, full_name].filter(Boolean)); if (pwErr) return res.status(400).json({ error: pwErr }); }
 
   const hash = bcrypt.hashSync(password, 12);
@@ -263,13 +267,16 @@ router.put('/profile', requireAuth, wrap(async (req, res) => {
 // ── Change / set own password ──────────────────────────────────────────────
 // OIDC-only users (no password_hash) can use this endpoint to *set* their
 // first password without supplying current_password. Existing-password users
-// still need to verify with their current one.
+// still need to verify with their current one. A hub account never gets a
+// first password; one linked with a password already (the owner's) may
+// rotate it, which proves the old one and adds no new way in.
 router.put('/password', requireAuth, wrap((req, res) => {
   const { current_password, new_password } = req.body;
   if (!new_password) return res.status(400).json({ error: 'New password required' });
   { const pwErr = validatePassword(new_password); if (pwErr) return res.status(400).json({ error: pwErr }); }
 
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  if (!user.password_hash && isHubManaged(user.id)) return res.status(403).json(HUB_MANAGED);
   if (user.password_hash) {
     if (!current_password) return res.status(400).json({ error: 'Current password required' });
     if (!bcrypt.compareSync(current_password, user.password_hash)) {
@@ -365,6 +372,9 @@ router.delete('/users/:id', requireAuth, requireAdmin, wrap((req, res) => {
 // ── Admin: reset another user's password ──────────────────────────────────
 router.put('/users/:id/password', requireAuth, requireAdmin, wrap((req, res) => {
   const id = parseInt(req.params.id);
+  // Behind a hub an admin is a hub session too; a password set here would
+  // outlive the hub token that asked for it.
+  if (isHubManaged(id)) return res.status(403).json(HUB_MANAGED);
   const { new_password } = req.body;
   { const pwErr = validatePassword(new_password); if (pwErr) return res.status(400).json({ error: pwErr }); }
   db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(new_password, 12), id);
@@ -448,7 +458,9 @@ router.post('/forgot-password', rateLimitLogin, wrap(async (req, res) => {
   if (!isEmailConfigured()) return respondOk();
 
   const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email.trim().toLowerCase());
-  if (!user) return respondOk();
+  // A hub account's email is whatever its owner typed into the profile, so
+  // a reset link there would hand out a local password; same 200 as unknown.
+  if (!user || isHubManaged(user.id)) return respondOk();
 
   // Invalidate any existing tokens for this user
   db.prepare('UPDATE password_reset_tokens SET used = 1 WHERE user_id = ?').run(user.id);
@@ -476,6 +488,8 @@ router.post('/reset-password', wrap((req, res) => {
   const row = db.prepare('SELECT * FROM password_reset_tokens WHERE token = ?').get(token);
   if (!row || row.used) return res.status(400).json({ error: 'Invalid or expired reset link' });
   if (new Date(row.expires_at) < new Date()) return res.status(400).json({ error: 'Reset link has expired' });
+  // Issued before the account was linked to the hub.
+  if (isHubManaged(row.user_id)) return res.status(403).json(HUB_MANAGED);
 
   db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(password, 12), row.user_id);
   db.prepare('UPDATE password_reset_tokens SET used = 1 WHERE token = ?').run(token);
@@ -542,6 +556,7 @@ router.delete('/invites/:token', requireAuth, requireAdmin, wrap((req, res) => {
 router.post('/accept-invite', wrap((req, res) => {
   const { token, username, password, full_name } = req.body;
   if (!token || !username || !password) return res.status(400).json({ error: 'Token, username and password required' });
+  if (isReservedUsername(username)) return res.status(400).json({ error: HUB_USERNAME_ERROR });
   { const pwErr = validatePassword(password); if (pwErr) return res.status(400).json({ error: pwErr }); }
 
   const invite = db.prepare('SELECT * FROM invite_tokens WHERE token = ?').get(token);

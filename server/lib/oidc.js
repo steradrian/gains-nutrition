@@ -14,6 +14,12 @@ import crypto from 'crypto';
 import db from '../db.js';
 import { encrypt, decrypt } from './token-crypto.js';
 import { logger } from '../logger.js';
+import { isHubManaged, isReservedUsername } from './hub-auth.js';
+
+// A hub account signs in only through the hub. Linking an IdP identity to it
+// (by hand from a hub session, or by a profile email the person typed) would
+// turn one 60 s hub token into a lasting OIDC sign-in.
+export const HUB_MANAGED_LINK_ERROR = 'This account signs in through the hub and cannot be linked to another sign-in.';
 
 // openid-client v5.7.x defaults outgoing HTTP requests to a 3500ms timeout,
 // which is too tight in practice — first-time Authentik / Keycloak / Authelia
@@ -245,6 +251,7 @@ export function resolveUser(provider, claims) {
   if (email && emailVerified && autoLink) {
     const localByEmail = db.prepare(`SELECT * FROM users WHERE email = ?`).get(email);
     if (localByEmail) {
+      if (isHubManaged(localByEmail.id)) throw new Error(HUB_MANAGED_LINK_ERROR);
       db.prepare(
         `INSERT INTO user_oidc_links (user_id, oidc_provider_id, oidc_sub, email_verified, last_login_at)
          VALUES (?, ?, ?, 1, datetime('now'))`
@@ -316,6 +323,7 @@ export function applyAdminMapping(provider, user, claims) {
 
 /** Link an existing logged-in user to a provider+sub. Used by the link flow. */
 export function linkUser(userId, providerId, sub, emailVerified) {
+  if (isHubManaged(userId)) throw new Error(HUB_MANAGED_LINK_ERROR);
   // If sub is already linked to a different user, refuse (would let one IdP
   // identity steal another local account).
   const existing = db.prepare(
@@ -372,6 +380,8 @@ export function setPasswordLoginEnabled(on) {
 function _deriveUsername(claims) {
   let base = (claims.preferred_username || (claims.email && claims.email.split('@')[0]) || `user${Date.now()}`)
     .toString().toLowerCase().replace(/[^a-z0-9._-]/g, '').slice(0, 32);
+  // `hub-` is the hub's (lib/hub-auth.js): an IdP's `hub-x` becomes `user-hub-x`.
+  if (isReservedUsername(base)) base = `user-${base}`.slice(0, 32);
   if (!base) base = `user${Date.now()}`;
   let candidate = base;
   let n = 1;

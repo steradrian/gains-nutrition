@@ -190,8 +190,9 @@ router.use('/api/proxy', proxyRoutes);
 router.use(authenticate);   // attach req.user on every request
 // Remember the address an admin uses, so emailed links (password reset,
 // invite, sharing) go there instead of to whatever Host a request claims.
+// Not a hub request: those arrive on the hub's internal address for us.
 router.use((req, res, next) => {
-  if (req.user?.role === 'admin') rememberAdminOrigin(req);
+  if (req.user?.role === 'admin' && req.authVia !== 'hub') rememberAdminOrigin(req);
   next();
 });
 router.use(csrfProtect);   // CSRF protection for cookie-based sessions
@@ -457,7 +458,9 @@ app.listen(PORT, async () => {
   try {
     const { repairOrphanedData } = await import('./lib/claim-anonymous-data.js');
     const r = repairOrphanedData();
-    if (r.ambiguous) {
+    if (r.hub) {
+      logger.warn(`[claim] ${r.rows} row(s) from single-user mode are unowned. Behind a hub they are not adopted automatically; the owner claims them with: node scripts/link-hub-user.js --user <you> --sub <hub id> --claim-anonymous`);
+    } else if (r.ambiguous) {
       logger.warn(`[claim] ${r.rows} row(s) from single-user mode are unowned, but this instance has more than one account so they cannot be attributed automatically. See https://traceapps.github.io/docs/auth/local-users/`);
     } else if (r.rows) {
       logger.info(`[claim] adopted ${r.rows} row(s) left over from single-user mode into user ${r.repaired}`);

@@ -32,6 +32,7 @@
  * this read-time live-resolve is the actual safety net.
  */
 import db from '../db.js';
+import { hubInstance } from './hub-auth.js';
 
 // Only rows the diary's owner may read fill in its items: their own, ones
 // shared with them (the same rule as lib/sharing.js canRead and GET
@@ -39,16 +40,23 @@ import db from '../db.js';
 // them, which GET /api/meals/:id already hands them. These used to look
 // across every account, so an item could pick up another account's
 // category, barcode, units or photo. userId null (user management off)
-// reads everything, as the routes do. One query each, not one per row.
-const READABLE_MEAL = `(m.user_id IS NULL OR m.user_id = @u OR m.visibility = 'group'
+// reads everything, as the routes do. Unowned single-user rows are anyone's,
+// except on a hub instance, where they are nobody's until the owner claims
+// them (lib/sharing.js canRead, the same rule). One query each, not one per
+// row.
+const readableMeal = anyoneNull => `(${anyoneNull ? 'm.user_id IS NULL OR ' : ''}m.user_id = @u OR m.visibility = 'group'
   OR (m.visibility = 'specific' AND EXISTS (SELECT 1 FROM meal_shares ms WHERE ms.meal_id = m.id AND ms.user_id = @u)))`;
-const READABLE_FOOD = `(f.user_id IS NULL OR f.user_id = @u OR f.visibility = 'group'
+const readableFood = anyoneNull => `(${anyoneNull ? 'f.user_id IS NULL OR ' : ''}f.user_id = @u OR f.visibility = 'group'
   OR (f.visibility = 'specific' AND EXISTS (SELECT 1 FROM food_shares fs WHERE fs.food_id = f.id AND fs.user_id = @u))
   OR f.id IN (SELECT CAST(COALESCE(json_extract(j.value, '$.food_server_id'), json_extract(j.value, '$.id')) AS INTEGER)
                 FROM meals m, json_each(CASE WHEN json_valid(m.items) THEN m.items ELSE '[]' END) j
-               WHERE m.deleted_at IS NULL AND j.type = 'object' AND ${READABLE_MEAL}))`;
-const foodScope = userId => (userId == null ? { sql: '1', args: {} } : { sql: READABLE_FOOD, args: { u: userId } });
-const mealScope = userId => (userId == null ? { sql: '1', args: {} } : { sql: READABLE_MEAL, args: { u: userId } });
+               WHERE m.deleted_at IS NULL AND j.type = 'object' AND ${readableMeal(anyoneNull)}))`;
+const READABLE_MEAL = readableMeal(true), READABLE_MEAL_HUB = readableMeal(false);
+const READABLE_FOOD = readableFood(true), READABLE_FOOD_HUB = readableFood(false);
+const foodScope = userId => (userId == null ? { sql: '1', args: {} }
+  : { sql: hubInstance() ? READABLE_FOOD_HUB : READABLE_FOOD, args: { u: userId } });
+const mealScope = userId => (userId == null ? { sql: '1', args: {} }
+  : { sql: hubInstance() ? READABLE_MEAL_HUB : READABLE_MEAL, args: { u: userId } });
 
 const _norm = s => String(s || '').trim().toLowerCase();
 
