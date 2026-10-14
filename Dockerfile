@@ -19,9 +19,10 @@ RUN npm run build
 # dynamic linker isn't present. DuckDB does not ship a musl variant of
 # those node bindings, so a glibc base is required.
 #
-# Multi-arch note: this image builds for both linux/amd64 and linux/arm64
-# (Raspberry Pi 4 / 5). npm picks the right @duckdb/node-bindings-linux-<arch>
-# automatically during install based on the build platform.
+# Multi-arch note: the Dockerfile itself is arch-agnostic (npm picks the right
+# @duckdb/node-bindings-linux-<arch> during install based on the build platform),
+# but the GHCR publish workflow only builds linux/amd64. Build locally for arm64
+# (Raspberry Pi 4 / 5).
 # node:20-slim
 FROM node@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0
 RUN apt-get update \
