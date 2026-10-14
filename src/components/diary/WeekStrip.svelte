@@ -21,6 +21,7 @@
   import { NtApi } from '../../lib/api.js';
   import { localDateStr } from '../../lib/db.js';
   import { Nutrition } from '../../lib/nutrition.js';
+  import { activityGoalAdjustment } from '../../lib/goal-resolver.js';
   import { disableAnimations, dateFormat } from '../../stores/settings.js';
 
   // Mirrors Diary.svelte's formatDateSub — respects the user's
@@ -53,6 +54,7 @@
   export let calorieGoalMode = 'fixed';            // 'fixed' | 'dynamic' | 'adaptive' — dynamic triggers per-day calories-out fetch
   export let calorieGoalFactor = 1;                // dynamic-mode multiplier applied to each day's calories_out
   export let adjustFromActivity = false;           // when true, add each day's own activity kcal to that day's goal (#180)
+  export let adaptiveReady   = false;              // calorieGoal is the learned Adaptive target, which already includes training
   export let activityPolicy  = 'wearable_wins';    // manual/wearable combination policy for per-day effective active kcal
   export let onSelectDate    = (_iso) => {};
   export let onDropMeal      = (_iso, _mealIdx) => {};   // Phase 7 drag-copy
@@ -299,10 +301,15 @@
       const active = Math.max(0, Number(activitySums[i]?.effective) || 0);
       newActive.set(iso, active);
       let base = calorieGoal;
-      if (needDynamic && dynamicOuts[i]?.calories_out != null) {
+      const fromBurn = needDynamic && dynamicOuts[i]?.calories_out != null;
+      if (fromBurn) {
         base = Math.round(Number(dynamicOuts[i].calories_out) * (Number(calorieGoalFactor) || 1));
       }
-      newGoal.set(iso, base + (needActive ? active : 0));
+      newGoal.set(iso, base + activityGoalAdjustment({
+        adjust: needActive,
+        goalFromBurn: fromBurn || (calorieGoalMode === 'adaptive' && adaptiveReady),
+        effective: active,
+      }));
     }
     goalByDate = newGoal;
     activeByDate = newActive;
@@ -315,7 +322,7 @@
   // parent bumps refreshKey (activity + food edits), or when any of
   // the mode / policy / toggle props change upstream. Cheap when
   // neither adjustment is active — the function early-returns.
-  $: currentDate, refreshKey, adjustFromActivity, activityPolicy, calorieGoalMode, calorieGoalFactor, calorieGoal, _loadWeekAdjustments();
+  $: currentDate, refreshKey, adjustFromActivity, adaptiveReady, activityPolicy, calorieGoalMode, calorieGoalFactor, calorieGoal, _loadWeekAdjustments();
 </script>
 
 <nav class="week-strip" aria-label="Week strip">

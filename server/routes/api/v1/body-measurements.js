@@ -8,8 +8,10 @@
  * Same day, Withings/Fitbit users can keep syncing via their existing
  * OAuth flows; this is the wire for scales that never touch a phone.
  *
- * Storage: writes to `diary.body_stats` for the day derived from
- * measured_at. Uses "overwrite only what's sent" semantics: fields
+ * Storage: writes to `diary.body_stats` for the day in `date`, or when
+ * that is absent the day measured_at falls on in the user's timezone
+ * setting (else the date written in measured_at itself). Never the
+ * server's timezone. Uses "overwrite only what's sent" semantics: fields
  * present in the payload replace whatever was there, but any keys
  * already in body_stats that the payload doesn't mention are
  * preserved untouched. So manual `notes` don't get clobbered when HA
@@ -20,11 +22,14 @@
  *
  * Wire contract:
  *   {
- *     measured_at:   "2026-07-25T16:10:51Z",   // required, ISO 8601
+ *     date:          "2026-07-25",             // the user's day; wins over measured_at
+ *     measured_at:   "2026-07-25T16:10:51Z",   // ISO 8601; required without date
  *     source:        "home-assistant",         // optional, free text, ≤64 chars
  *
  *     // Standard body-composition fields — mapped to NT's native keys:
- *     weight:        76.9,   // kg   → body_stats.weight_kg
+ *     weight:        76.9,   // kg   → body_stats.weight (+ weight_unit 'kg',
+ *                            //        what the Weight card and adaptive
+ *                            //        TDEE read) and body_stats.weight_kg
  *     body_fat:      21.2,   // %    → body_stats.body_fat_pct
  *     muscle_mass:   56.14,  // kg   → body_stats.muscle_mass_kg
  *     bone_mass:     3.01,   // kg   → body_stats.bone_mass_kg
@@ -45,11 +50,18 @@
  * Both camelCase (measuredAt, bodyFat) and snake_case (measured_at,
  * body_fat) are accepted on input for convenience — snake_case wins
  * on collision. Everything is stored snake_case internally.
+ *
+ * Every write also goes to wellness_data (source 'federation') and fires
+ * the body_stat.logged webhook, as a weight saved in the app does. A day
+ * erased in the app is refused (409 diary_tombstoned), as the
+ * PUT /api/v1/diary/:date/body-stat route does.
  */
 import { Router } from 'express';
 import db from '../../../db.js';
 import { wrap } from '../../../logger.js';
 import { requireScope } from '../../../middleware/bearer-auth.js';
+import { isCalendarDate, safeJson } from '../../../lib/mcp/_util.js';
+import { dispatchWebhookEvent } from '../../../lib/webhooks.js';
 
 const router = Router();
 
@@ -116,30 +128,66 @@ function _readField(body, snakeKey) {
   return n;
 }
 
-/** Parse measured_at (or measuredAt) into a YYYY-MM-DD date string
- *  in the server's local timezone. That matches how Withings sync,
- *  the manual body-stats UI, and the diary all key entries. */
-function _measurementDate(iso) {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  // toISOString would give UTC; we want the date the user weighed in.
-  // JS Date's local getters do exactly that.
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+function _userTimezone(owner) {
+  if (owner == null) return null;
+  const row = db.prepare(
+    `SELECT value FROM user_settings WHERE user_id = ? AND key = 'timezone' AND deleted_at IS NULL`
+  ).get(owner);
+  const tz = row?.value == null ? null : safeJson(row.value, row.value);
+  return typeof tz === 'string' && tz ? tz : null;
 }
+
+/** The calendar day an instant falls on in an IANA timezone, or null when
+ *  the zone is unknown. */
+function _dayIn(timeZone, instant) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
+      .formatToParts(instant);
+    const get = type => parts.find(p => p.type === type)?.value;
+    return `${get('year')}-${get('month')}-${get('day')}`;
+  } catch {
+    return null;
+  }
+}
+
+/** The diary day a measured_at belongs to when no date was sent. A time
+ *  with no zone is the device's wall clock, so its written date. Otherwise
+ *  the day in the user's timezone setting, else the date written in the
+ *  string (the device's own day), else its UTC day. Never the server's
+ *  timezone. */
+function _measurementDate(raw, instant, owner) {
+  const text = String(raw).trim();
+  const written = isCalendarDate(text.slice(0, 10)) ? text.slice(0, 10) : null;
+  const zoned = /(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(text);
+  if (written && !zoned) return written;
+  const tz = _userTimezone(owner);
+  const inZone = tz ? _dayIn(tz, instant) : null;
+  return inZone ?? written ?? instant.toISOString().slice(0, 10);
+}
+
+class DiaryTombstoned extends Error {}
 
 router.post('/', requireScope('write:body-measurements'), wrap((req, res) => {
   const body = req.body || {};
+  const userId = req.apiUser.id;
+  const u = (userId === 0 || userId == null) ? null : userId;
+
   const measuredAtRaw = body.measured_at ?? body.measuredAt;
-  if (!measuredAtRaw) {
-    return res.status(400).json({ error: 'measured_at required', code: 'bad_measured_at' });
+  const dateRaw = body.date;
+  if (dateRaw != null && (typeof dateRaw !== 'string' || !isCalendarDate(dateRaw))) {
+    return res.status(400).json({ error: 'date must be YYYY-MM-DD', code: 'bad_date' });
   }
-  const date = _measurementDate(measuredAtRaw);
-  if (!date) {
-    return res.status(400).json({ error: 'measured_at must be ISO 8601', code: 'bad_measured_at' });
+  if (dateRaw == null && !measuredAtRaw) {
+    return res.status(400).json({ error: 'date or measured_at required', code: 'bad_measured_at' });
   }
+  let measuredAt = null;
+  if (measuredAtRaw) {
+    measuredAt = new Date(measuredAtRaw);
+    if (Number.isNaN(measuredAt.getTime())) {
+      return res.status(400).json({ error: 'measured_at must be ISO 8601', code: 'bad_measured_at' });
+    }
+  }
+  const date = dateRaw ?? _measurementDate(measuredAtRaw, measuredAt, u);
 
   // Assemble the update: mapped fields under their body_stats keys,
   // plus extras under their wire names. Only include what was
@@ -171,34 +219,35 @@ router.post('/', requireScope('write:body-measurements'), wrap((req, res) => {
   // colliding with any future first-class field.
   const source = String(body.source || '').trim().slice(0, 64);
   if (source) updates._last_source = source;
-  updates._last_measured_at = new Date(measuredAtRaw).toISOString();
+  if (measuredAt) updates._last_measured_at = measuredAt.toISOString();
 
-  const userId = req.apiUser.id;
-  const u = (userId === 0 || userId == null) ? null : userId;
+  // The diary's own weight: what the Weight card shows and the adaptive
+  // TDEE reads (weight + its unit tag). weight_kg stays for older readers.
+  const diaryWeight = updates.weight_kg != null
+    ? { weight: Math.round(updates.weight_kg * 100) / 100, weight_unit: 'kg' }
+    : {};
 
-  const row = u == null
-    ? db.prepare('SELECT body_stats FROM diary WHERE date = ? AND user_id IS NULL').get(date)
-    : db.prepare('SELECT body_stats FROM diary WHERE date = ? AND user_id = ?').get(date, u);
-
-  const existing = JSON.parse(row?.body_stats || '{}');
-  const merged = { ...existing, ...updates };
-
-  if (u == null) {
-    db.prepare(`
-      INSERT INTO diary (date, items, body_stats, water, updated_at)
-      VALUES (?, '[]', ?, '[]', datetime('now'))
-      ON CONFLICT(date, user_id) DO UPDATE SET
-        body_stats = excluded.body_stats,
-        updated_at = excluded.updated_at
-    `).run(date, JSON.stringify(merged));
-  } else {
-    db.prepare(`
-      INSERT INTO diary (user_id, date, items, body_stats, water, updated_at)
-      VALUES (?, ?, '[]', ?, '[]', datetime('now'))
-      ON CONFLICT(date, user_id) DO UPDATE SET
-        body_stats = excluded.body_stats,
-        updated_at = excluded.updated_at
-    `).run(u, date, JSON.stringify(merged));
+  const owner = u == null ? 'user_id IS NULL' : 'user_id = ?';
+  const ownerParams = u == null ? [] : [u];
+  let merged;
+  try {
+    merged = db.transaction(() => {
+      const row = db.prepare(`SELECT id, body_stats, deleted_at FROM diary WHERE date = ? AND ${owner}`).get(date, ...ownerParams);
+      if (row?.deleted_at) throw new DiaryTombstoned();
+      const next = { ...safeJson(row?.body_stats || '{}', {}), ...updates, ...diaryWeight };
+      if (row) {
+        db.prepare(`UPDATE diary SET body_stats = ?, updated_at = datetime('now') WHERE id = ?`).run(JSON.stringify(next), row.id);
+      } else {
+        db.prepare(`INSERT INTO diary (user_id, date, items, body_stats, water, updated_at) VALUES (?, ?, '[]', ?, '[]', datetime('now'))`)
+          .run(u, date, JSON.stringify(next));
+      }
+      return next;
+    })();
+  } catch (e) {
+    if (e instanceof DiaryTombstoned) {
+      return res.status(409).json({ error: `Diary day ${date} was erased in the app`, code: 'diary_tombstoned' });
+    }
+    throw e;
   }
 
   // Also mirror every numeric metric to wellness_data with
@@ -223,10 +272,14 @@ router.post('/', requireScope('write:body-measurements'), wrap((req, res) => {
     insertWellness.run(wellnessUid, date, key, value, wellnessMeta);
   }
 
+  try {
+    dispatchWebhookEvent(u, 'body_stat.logged', { date, stats: merged });
+  } catch { /* a webhook never fails the save */ }
+
   res.status(201).json({
     ok: true,
     date,
-    stored: Object.keys(updates).filter(k => !k.startsWith('_')),
+    stored: [...(diaryWeight.weight != null ? ['weight'] : []), ...Object.keys(updates).filter(k => !k.startsWith('_'))],
   });
 }));
 

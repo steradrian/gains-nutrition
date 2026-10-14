@@ -7,7 +7,7 @@
   import DatePicker from '../components/ui/DatePicker.svelte';
   import DateInput  from '../components/ui/DateInput.svelte';
   import { resolveAssetUrl, isNative, getServerUrl } from '../lib/platform.js';
-  import { resolveGoalFor } from '../lib/goal-resolver.js';
+  import { resolveGoalFor, activityGoalAdjustment } from '../lib/goal-resolver.js';
   import { fade, slide, fly } from 'svelte/transition';
   import { tweened } from 'svelte/motion';
   import { cubicOut } from 'svelte/easing';
@@ -489,8 +489,16 @@
   // on; otherwise the activity section still shows the burn but the goal
   // stays at its base value (cleanest for fixed-budget / cutting workflows).
   // Macro percentages always use the base goal so protein/carbs/fat targets
-  // don't drift when you log a workout.
-  $: _effectiveActive = ($diaryShowActivity && $calorieAdjustFromActivity ? ($activitySummary?.effective || 0) : 0);
+  // don't drift when you log a workout. An Adaptive or Dynamic target
+  // already includes training, so activity never adds to it (it only does
+  // while the target falls back to the fixed goal): activityGoalAdjustment.
+  $: _goalFromBurn = ($calorieGoalMode === 'dynamic' && _dynamicCaloriesOut != null)
+                  || ($calorieGoalMode === 'adaptive' && _adaptiveTdee != null);
+  $: _effectiveActive = activityGoalAdjustment({
+       adjust: $diaryShowActivity && $calorieAdjustFromActivity,
+       goalFromBurn: _goalFromBurn,
+       effective: $activitySummary?.effective,
+     });
   $: caloriesGoalAdjusted = caloriesGoal + _effectiveActive;
 
   $: _hasBottomNav = $navStyle === 'bottom' || $navStyle === 'both';
@@ -1995,6 +2003,7 @@
       calorieGoalMode={$calorieGoalMode}
       calorieGoalFactor={$calorieGoalFactor}
       adjustFromActivity={$diaryShowActivity && $calorieAdjustFromActivity}
+      adaptiveReady={$calorieGoalMode === 'adaptive' && _adaptiveTdee != null}
       activityPolicy={$manualActivityPolicy || 'wearable_wins'}
       refreshKey={_weekStripRefreshKey}
       onSelectDate={(iso) => _loadEntryTracked(iso)}

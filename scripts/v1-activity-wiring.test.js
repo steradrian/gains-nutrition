@@ -44,7 +44,8 @@ test('POST /api/v1/activity writes into activity_log (the diary Activity table)'
 test('POST /api/v1/activity supports idempotency via external_id', () => {
   assert.match(activityJs, /external_id/);
   assert.match(activityJs, /UPDATE activity_log/);
-  assert.match(activityJs, /sourceValue/);
+  // The key has its own column; scripts/bridge-endpoints.test.js runs it.
+  assert.match(activityJs, /external_id = \?/);
 });
 
 test('POST /api/v1/activity does NOT write to workouts or wellness_data (those are /workouts territory)', () => {

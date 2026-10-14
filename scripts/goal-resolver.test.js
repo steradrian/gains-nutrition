@@ -5,9 +5,10 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   resolveGoalFor, resolveRangeGoal,
-  percentGoalToGrams, gramsGoalToPercent, macroGoalGrams,
+  percentGoalToGrams, gramsGoalToPercent, macroGoalGrams, activityGoalAdjustment,
 } from '../src/lib/goal-resolver.js';
 
 // 2026-09-06 is a Sunday. Chosen deliberately: the bug report uses
@@ -235,5 +236,33 @@ test('macroGoalGrams: everything that is not a percent goal is returned exactly 
   for (const g of cases) assert.equal(macroGoalGrams(g, 1828, 4), before(g), JSON.stringify(g));
   // isPercent on a stat with no calorie density (e.g. fiber) is left alone.
   assert.equal(macroGoalGrams({ max: 30, isPercent: true }, 1828, undefined), 30);
+});
+
+// ── activityGoalAdjustment: workout kcal and the day's target ─────────────
+// fitness-hub decision-workout-kcal.md section 1.
+
+test('activityGoalAdjustment: a fixed target with the opt-in on rises by the activity', () => {
+  assert.equal(activityGoalAdjustment({ adjust: true, goalFromBurn: false, effective: 190 }), 190);
+});
+
+test('activityGoalAdjustment: Adaptive (ready) or Dynamic (with a burn) never moves, the toggle on or off', () => {
+  // The pre-fix Diary added it in every mode: the double count.
+  assert.equal(activityGoalAdjustment({ adjust: true, goalFromBurn: true, effective: 190 }), 0);
+  assert.equal(activityGoalAdjustment({ adjust: false, goalFromBurn: true, effective: 190 }), 0);
+});
+
+test('activityGoalAdjustment: the Diary target and the week strip both go through it', () => {
+  const diary = readFileSync(new URL('../src/routes/Diary.svelte', import.meta.url), 'utf8');
+  const strip = readFileSync(new URL('../src/components/diary/WeekStrip.svelte', import.meta.url), 'utf8');
+  assert.match(diary, /_effectiveActive = activityGoalAdjustment\(/);
+  assert.match(diary, /adaptiveReady=\{\$calorieGoalMode === 'adaptive' && _adaptiveTdee != null\}/);
+  assert.match(strip, /base \+ activityGoalAdjustment\(/);
+});
+
+test('activityGoalAdjustment: the opt-in off adds nothing; bad or negative kcal add nothing', () => {
+  assert.equal(activityGoalAdjustment({ adjust: false, goalFromBurn: false, effective: 190 }), 0);
+  for (const effective of [undefined, null, NaN, -50, 'x']) {
+    assert.equal(activityGoalAdjustment({ adjust: true, goalFromBurn: false, effective }), 0, String(effective));
+  }
 });
 

@@ -295,10 +295,44 @@ function restoreFromZip(zip) {
 
     db.prepare('DELETE FROM activity_log').run();
     const insActivity = db.prepare(`
-      INSERT OR IGNORE INTO activity_log (id, user_id, date, name, kcal, duration_min, distance, source, met, is_template, created_at, updated_at, deleted_at)
-      VALUES (@id, @user_id, @date, @name, @kcal, @duration_min, @distance, @source, @met, @is_template, @created_at, @updated_at, @deleted_at)
+      INSERT OR IGNORE INTO activity_log (id, user_id, date, name, kcal, duration_min, distance, source, met, is_template, created_at, updated_at, deleted_at, external_id, user_edited_at)
+      VALUES (@id, @user_id, @date, @name, @kcal, @duration_min, @distance, @source, @met, @is_template, @created_at, @updated_at, @deleted_at, @external_id, @user_edited_at)
     `);
-    for (const a of data.activity_log || []) insActivity.run({ met: null, is_template: 0, deleted_at: null, ...a });
+    const activityRows = (data.activity_log || []).map((a) => {
+      const row = { met: null, is_template: 0, deleted_at: null, external_id: null, user_edited_at: null, ...a };
+      // A backup from before the external_id column keeps the key in source.
+      if (row.external_id == null && typeof row.source === 'string' && row.source.startsWith('external:')) {
+        row.external_id = row.source.slice('external:'.length);
+        row.source = 'external';
+      }
+      return row;
+    });
+    // One row per key (the unique index), so INSERT OR IGNORE never drops
+    // a live row behind an older deleted one. Folded as the db.js migration
+    // does: the live row with the lowest id (the one the old lookup kept
+    // updating) keeps the key, else the last one changed; the others are
+    // soft-deleted and lose it.
+    const keyOf = r => `${r.user_id ?? 0}\0${r.external_id}`;
+    const keeps = (r, cur) => {
+      if ((r.deleted_at == null) !== (cur.deleted_at == null)) return r.deleted_at == null;
+      if (r.deleted_at == null) return Number(r.id) < Number(cur.id);
+      if ((r.updated_at ?? '') !== (cur.updated_at ?? '')) return (r.updated_at ?? '') > (cur.updated_at ?? '');
+      return Number(r.id) > Number(cur.id);
+    };
+    const keepers = new Map();
+    for (const r of activityRows) {
+      if (r.external_id == null) continue;
+      const cur = keepers.get(keyOf(r));
+      if (!cur || keeps(r, cur)) keepers.set(keyOf(r), r);
+    }
+    const restoredAt = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    for (const r of activityRows) {
+      if (r.external_id != null && keepers.get(keyOf(r)) !== r) {
+        r.external_id = null;
+        r.deleted_at = r.deleted_at ?? restoredAt;
+      }
+      insActivity.run(r);
+    }
 
     // Intermittent fasting log
     db.prepare('DELETE FROM fasts').run();

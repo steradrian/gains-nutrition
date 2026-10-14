@@ -10,6 +10,7 @@ import foodsRouter from './foods.js';
 import workoutsRouter from './workouts.js';
 import activityRouter from './activity.js';
 import bodyMeasurementsRouter from './body-measurements.js';
+import bodyStatsRouter from './body-stats.js';
 import diaryRouter from './diary.js';
 import goalsRouter from './goals.js';
 import mealsRouter from './meals.js';
@@ -28,6 +29,7 @@ router.use('/foods', foodsRouter);
 router.use('/workouts', workoutsRouter);
 router.use('/activity', activityRouter);
 router.use('/body-measurements', bodyMeasurementsRouter);
+router.use('/body-stats', bodyStatsRouter);
 // diary/goals/meals/steps/profile are the general-purpose public API (a
 // user's own scripts and automations), not a sister-app federation
 // contract like the routers above. Each self-gates behind

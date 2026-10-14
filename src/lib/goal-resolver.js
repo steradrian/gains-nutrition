@@ -123,3 +123,25 @@ export function macroGoalGrams(g, calGoal, density) {
   if (raw == null || !g.isPercent || !density) return raw;
   return percentGoalToGrams(raw, calGoal, density) ?? raw;
 }
+
+/**
+ * The activity kcal a day's calorie target goes up by (Diary and its week
+ * strip). A target learned from the body (Adaptive, once ready) or taken
+ * from a wearable's total burn (Dynamic, on a day it has one) already
+ * includes training, so activity never adds to it; adding it counted
+ * workouts twice. A target that falls back to the fixed goal (Adaptive's
+ * first weeks, Dynamic without a burn for the day) is a fixed target, and
+ * the "adjust from activity" opt-in applies. See
+ * fitness-hub docs/reviews/decision-workout-kcal.md, section 1.
+ *
+ * @param {object}  p
+ * @param {boolean} p.adjust         "Adjust goal from activity" is on
+ * @param {boolean} p.goalFromBurn   the base target came from Adaptive or Dynamic
+ * @param {number}  p.effective      the day's effective active kcal
+ * @returns {number} kcal to add, 0 or more
+ */
+export function activityGoalAdjustment({ adjust, goalFromBurn, effective }) {
+  if (!adjust || goalFromBurn) return 0;
+  const kcal = Number(effective);
+  return Number.isFinite(kcal) && kcal > 0 ? kcal : 0;
+}

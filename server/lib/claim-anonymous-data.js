@@ -46,6 +46,17 @@ const ORPHAN_EXTRA_COUNTS = [
 ];
 
 export const claimAnonymousData = db.transaction((userId) => {
+  // An integration key (activity_log.external_id) is unique per owner. When
+  // the account already has a row for a key the anonymous owner also has,
+  // the account's row wins: the anonymous one is soft-deleted and loses
+  // the key, or the move below would fail the unique index and roll the
+  // whole claim back.
+  db.prepare(`
+    UPDATE activity_log
+       SET external_id = NULL, deleted_at = COALESCE(deleted_at, datetime('now')), updated_at = datetime('now')
+     WHERE user_id IS NULL AND external_id IN (
+       SELECT external_id FROM activity_log WHERE user_id = ? AND external_id IS NOT NULL)
+  `).run(userId);
   for (const t of CLAIM_NULL) {
     db.prepare(`UPDATE ${t} SET user_id = ? WHERE user_id IS NULL`).run(userId);
   }

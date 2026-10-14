@@ -8,10 +8,12 @@
  * NutriTrace was updating Wellness "Body Weight" but leaving Body
  * Stats "Weight" (and its goal) stale.
  *
- * Called from every wellness-write site that handles `weight_kg`:
- *   - server/routes/sync.js         (Health Connect via Android push)
- *   - server/routes/withings.js     (Withings OAuth pull)
- *   - server/routes/api/v1/body-measurements.js (external API)
+ * Called from server/routes/sync.js (Health Connect via Android push),
+ * the one wellness-write site that handles `weight_kg` and leaves the
+ * diary alone; withings.js writes body_stats itself.
+ * server/routes/api/v1/body-measurements.js does not call it either: a weight
+ * sent there is a deliberate reading, so it writes body_stats.weight
+ * (tagged kg) itself, overwriting, besides its wellness_data row.
  * Fitbit and Garmin routes don't currently handle weight; add the
  * call there if that changes.
  *
