@@ -14,7 +14,7 @@ import crypto from 'crypto';
 import db from '../db.js';
 import { encrypt, decrypt } from './token-crypto.js';
 import { logger } from '../logger.js';
-import { isHubManaged } from './hub-auth.js';
+import { isHubManaged, isReservedUsername } from './hub-auth.js';
 
 // A hub account signs in only through the hub. Linking an IdP identity to it
 // (by hand from a hub session, or by a profile email the person typed) would
@@ -380,6 +380,8 @@ export function setPasswordLoginEnabled(on) {
 function _deriveUsername(claims) {
   let base = (claims.preferred_username || (claims.email && claims.email.split('@')[0]) || `user${Date.now()}`)
     .toString().toLowerCase().replace(/[^a-z0-9._-]/g, '').slice(0, 32);
+  // `hub-` is the hub's (lib/hub-auth.js): an IdP's `hub-x` becomes `user-hub-x`.
+  if (isReservedUsername(base)) base = `user-${base}`.slice(0, 32);
   if (!base) base = `user${Date.now()}`;
   let candidate = base;
   let n = 1;

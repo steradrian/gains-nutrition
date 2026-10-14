@@ -192,6 +192,10 @@ function restoreFromZip(zip) {
   const data = JSON.parse(zip.readAsText('database.json'));
 
   db.transaction(() => {
+    // Read before DELETE FROM users cascades them away; see the hub links below.
+    const hubLinks = Array.isArray(data.user_hub_links)
+      ? data.user_hub_links
+      : db.prepare('SELECT * FROM user_hub_links').all();
     db.prepare('DELETE FROM password_reset_tokens').run();
     db.prepare('DELETE FROM invite_tokens').run();
     db.prepare('DELETE FROM food_shares').run();
@@ -337,13 +341,17 @@ function restoreFromZip(zip) {
     for (const l of data.user_oidc_links || []) insOidcLink.run({ email_verified: 0, last_login_at: null, ...l });
 
     // Hub links (lib/hub-auth.js). Losing them would give every hub user a
-    // new, empty account on their next request.
+    // new, empty account on their next request. A backup with the key
+    // replaces them; one made before they existed (no key) keeps the
+    // current ones. Either way only links to an account the restore brought
+    // back are kept.
     db.prepare('DELETE FROM user_hub_links').run();
     const insHubLink = db.prepare(`
       INSERT OR IGNORE INTO user_hub_links (id, user_id, issuer, sub, created_at)
-      VALUES (@id, @user_id, @issuer, @sub, @created_at)
+      SELECT @id, @user_id, @issuer, @sub, @created_at
+       WHERE EXISTS (SELECT 1 FROM users WHERE id = @user_id)
     `);
-    for (const l of data.user_hub_links || []) insHubLink.run({ created_at: null, ...l });
+    for (const l of hubLinks) insHubLink.run({ created_at: null, ...l });
 
     // Federation API tokens — token_hash is opaque SHA-256, users can't
     // regenerate the same token. Preserving these across restore keeps

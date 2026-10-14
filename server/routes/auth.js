@@ -11,7 +11,7 @@ import { sendPasswordReset, sendInvite, isEmailConfigured } from '../email.js';
 import { estimate as estimatePasswordStrength, STRONG_MIN_SCORE } from '../lib/password-strength.js';
 import { claimAnonymousData, purgeUnreferencedUserData, purgeUserRows } from '../lib/claim-anonymous-data.js';
 import { ownerOrOptIn } from '../lib/outbound-policy.js';
-import { isHubManaged } from '../lib/hub-auth.js';
+import { HUB_USERNAME_ERROR, isHubManaged, isReservedUsername } from '../lib/hub-auth.js';
 
 const HUB_MANAGED = { error: 'This account signs in through the hub; its password is managed there.', code: 'hub_managed' };
 
@@ -216,6 +216,7 @@ router.post('/register', wrap((req, res) => {
 
   const { username, password, full_name, nickname, birthday, gender, role, email } = req.body;
   if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+  if (isReservedUsername(username)) return res.status(400).json({ error: HUB_USERNAME_ERROR });
   { const pwErr = validatePassword(password, [username, email, full_name].filter(Boolean)); if (pwErr) return res.status(400).json({ error: pwErr }); }
 
   const hash = bcrypt.hashSync(password, 12);
@@ -270,12 +271,12 @@ router.put('/profile', requireAuth, wrap(async (req, res) => {
 // first password; one linked with a password already (the owner's) may
 // rotate it, which proves the old one and adds no new way in.
 router.put('/password', requireAuth, wrap((req, res) => {
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
-  if (!user.password_hash && isHubManaged(user.id)) return res.status(403).json(HUB_MANAGED);
   const { current_password, new_password } = req.body;
   if (!new_password) return res.status(400).json({ error: 'New password required' });
   { const pwErr = validatePassword(new_password); if (pwErr) return res.status(400).json({ error: pwErr }); }
 
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  if (!user.password_hash && isHubManaged(user.id)) return res.status(403).json(HUB_MANAGED);
   if (user.password_hash) {
     if (!current_password) return res.status(400).json({ error: 'Current password required' });
     if (!bcrypt.compareSync(current_password, user.password_hash)) {
@@ -555,6 +556,7 @@ router.delete('/invites/:token', requireAuth, requireAdmin, wrap((req, res) => {
 router.post('/accept-invite', wrap((req, res) => {
   const { token, username, password, full_name } = req.body;
   if (!token || !username || !password) return res.status(400).json({ error: 'Token, username and password required' });
+  if (isReservedUsername(username)) return res.status(400).json({ error: HUB_USERNAME_ERROR });
   { const pwErr = validatePassword(password); if (pwErr) return res.status(400).json({ error: pwErr }); }
 
   const invite = db.prepare('SELECT * FROM invite_tokens WHERE token = ?').get(token);

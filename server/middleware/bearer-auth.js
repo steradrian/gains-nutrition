@@ -9,7 +9,6 @@
  */
 import { lookupRawToken } from '../lib/api-tokens.js';
 import { HUB_SYNC_SCOPES } from '../lib/hub-auth.js';
-import { bearerToken } from './auth.js';
 
 const RATE_LIMIT_PER_MIN = Number(process.env.API_RATE_LIMIT_PER_MIN) || 60;
 // The hub's background sync backfills history in bursts (one request per
@@ -63,12 +62,13 @@ export function bearerAuth(req, res, next) {
     }, HUB_SYNC_RATE_LIMIT_PER_MIN);
   }
 
-  const raw = bearerToken(req.get('authorization'));
-  if (!raw) {
+  const auth = req.get('authorization') || '';
+  const m = auth.match(/^Bearer\s+(\S+)\s*$/i);
+  if (!m) {
     return res.status(401).json({ error: 'Token required', code: 'auth_missing' });
   }
 
-  const lookup = lookupRawToken(raw);
+  const lookup = lookupRawToken(m[1]);
   if (!lookup) {
     return res.status(401).json({ error: 'Invalid token', code: 'auth_invalid' });
   }

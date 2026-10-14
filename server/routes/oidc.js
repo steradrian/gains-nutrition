@@ -9,7 +9,7 @@ import { wrap } from '../logger.js';
 import { logger } from '../logger.js';
 import { signToken, sessionMaxAge, requireAuth, userMgmtActive } from '../middleware/auth.js';
 import { claimAnonymousData } from '../lib/claim-anonymous-data.js';
-import { hubMode, isHubManaged } from '../lib/hub-auth.js';
+import { hubInstance, isHubManaged } from '../lib/hub-auth.js';
 import {
   HUB_MANAGED_LINK_ERROR, listProviders, publicProvider, getProvider, getClient,
   generateAuthChecks, persistState, consumeState,
@@ -34,10 +34,11 @@ const LOGOUT_COOKIE = 'nt_oidc_logout';
  * (mirrors password /register) and make the account admin. Shares one
  * helper with the password path so the two cannot drift — an OIDC-first
  * instance has exactly the same single-user data to adopt.
- * Never behind a hub, where nobody becomes admin by arriving first.
+ * Never behind a hub (or on an instance that has hub accounts), where nobody
+ * becomes admin by arriving first.
  */
 export function bootstrapFirstOidcUser(result) {
-  if (hubMode() || !result.created) return false;
+  if (hubInstance() || !result.created) return false;
   if (db.prepare(`SELECT COUNT(*) AS n FROM users`).get().n !== 1) return false;
   claimAnonymousData(result.user.id);
   db.prepare(`UPDATE users SET role = 'admin' WHERE id = ?`).run(result.user.id);

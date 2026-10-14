@@ -3,8 +3,9 @@
  *
  * Hub tokens: short-lived ES256 JWS a trusted hub signs for each request it
  * forwards on a signed-in user's behalf (scope=user) or for its own
- * background sync (scope=sync). On only when HUB_JWKS is set; unset, nothing
- * here runs and the server behaves as upstream.
+ * background sync (scope=sync). On only when HUB_JWKS is set; unset, on an
+ * instance that never had hub accounts, the server behaves as upstream. One
+ * that did (user_hub_links has rows) stays closed: see hubInstance().
  *
  *   HUB_ISSUER  the hub's `iss` (required with HUB_JWKS)
  *   HUB_JWKS    the hub's public keys, a JWKS JSON string. Never fetched.
@@ -44,6 +45,24 @@ const SCOPES = new Set(['user', 'sync']);
 /** True when the hub-token path is on (HUB_JWKS set). */
 export function hubMode(env = process.env) {
   return String(env.HUB_JWKS || '').trim() !== '';
+}
+
+/** How many accounts the hub made or was linked to (user_hub_links rows). */
+export function hubLinkCount() {
+  return db.prepare('SELECT COUNT(*) AS n FROM user_hub_links').get().n;
+}
+
+/**
+ * True while this instance belongs to a hub: HUB_JWKS is set, or hub
+ * accounts exist even though it is not (unset by mistake, or a broken
+ * deploy). Everything that would otherwise hand the instance to whoever
+ * arrives first (single-user mode, the open first /register, the startup
+ * adoption of single-user data, unowned rows readable by every account)
+ * asks this, not hubMode(), so unsetting HUB_JWKS fails closed rather than
+ * giving a friend's account the owner's data.
+ */
+export function hubInstance(env = process.env) {
+  return hubMode(env) || db.prepare('SELECT 1 FROM user_hub_links LIMIT 1').get() != null;
 }
 
 function parseKeySet(raw) {
@@ -142,8 +161,15 @@ export function verifyHubToken(token, config, nowS = Math.floor(Date.now() / 100
   return { ok: true, claims };
 }
 
+// Usernames the hub makes start with this; nobody else may pick one, so a
+// local account can never pass for a hub one.
+export const HUB_USERNAME_PREFIX = 'hub-';
+export const HUB_USERNAME_ERROR = `Usernames starting with "${HUB_USERNAME_PREFIX}" are reserved.`;
+export const isReservedUsername = username =>
+  String(username || '').trim().toLowerCase().startsWith(HUB_USERNAME_PREFIX);
+
 function _username(issuer, sub) {
-  const base = 'hub-' + crypto.createHash('sha256').update(`${issuer}\0${sub}`).digest('hex').slice(0, 16);
+  const base = HUB_USERNAME_PREFIX + crypto.createHash('sha256').update(`${issuer}\0${sub}`).digest('hex').slice(0, 16);
   let candidate = base;
   for (let n = 2; db.prepare('SELECT 1 FROM users WHERE username = ?').get(candidate); n++) candidate = `${base}-${n}`;
   return candidate;
@@ -175,11 +201,12 @@ const _resolveHubUser = db.transaction((issuer, { sub, name }) => {
 export const resolveHubUser = (issuer, claims) =>
   _findLinked(issuer, claims.sub) ?? _resolveHubUser.immediate(issuer, claims);
 
-/** True when the hub is on and the account is reached through it. Its
- *  password is the hub's business: it never gets a local one from a request,
- *  or a stolen 60 s hub token would turn into a permanent local sign-in. */
+/** True when the account is reached through the hub. Its password is the
+ *  hub's business: it never gets a local one from a request, or a stolen
+ *  60 s hub token would turn into a permanent local sign-in. Read from the
+ *  link alone, HUB_JWKS set or not: with the hub switched off, an email
+ *  typed in from a hub session must still not become a reset link. */
 export function isHubManaged(userId) {
-  if (!hubMode()) return false;
   return db.prepare('SELECT 1 FROM user_hub_links WHERE user_id = ?').get(userId) != null;
 }
 

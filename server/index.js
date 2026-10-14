@@ -190,8 +190,9 @@ router.use('/api/proxy', proxyRoutes);
 router.use(authenticate);   // attach req.user on every request
 // Remember the address an admin uses, so emailed links (password reset,
 // invite, sharing) go there instead of to whatever Host a request claims.
+// Not a hub request: those arrive on the hub's internal address for us.
 router.use((req, res, next) => {
-  if (req.user?.role === 'admin') rememberAdminOrigin(req);
+  if (req.user?.role === 'admin' && req.authVia !== 'hub') rememberAdminOrigin(req);
   next();
 });
 router.use(csrfProtect);   // CSRF protection for cookie-based sessions

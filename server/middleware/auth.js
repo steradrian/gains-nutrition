@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import db from '../db.js';
 import { logger } from '../logger.js';
-import { headerCarriesHubToken, hubBearer, hubConfig, hubMode } from '../lib/hub-auth.js';
+import { headerCarriesHubToken, hubBearer, hubConfig, hubInstance, hubLinkCount, hubMode } from '../lib/hub-auth.js';
 
 // A broken HUB_JWKS / HUB_ISSUER must stop the server, not quietly turn the
 // hub's path off (the hub's requests would then be anonymous).
@@ -14,6 +14,13 @@ if (hubMode()) {
     console.error(`[FATAL] ${e.message}`);
     process.exit(1);
   }
+} else if (hubInstance()) {
+  // HUB_JWKS was unset on an instance the hub made accounts on. Not fatal
+  // (the local accounts still sign in), but it must not fall back to
+  // single-user mode or adopt single-user data into a friend's account.
+  console.error(`[ERROR] HUB_JWKS is not set, but ${hubLinkCount()} account(s) here belong to a hub (user_hub_links). `
+    + 'Staying closed: no single-user mode, no open first /register, no automatic adoption of single-user data, '
+    + 'and hub accounts cannot sign in or get a local password. Set HUB_JWKS and HUB_ISSUER again to let hub users back in.');
 }
 
 // In production, refuse to start without an explicit JWT_SECRET — silently falling
@@ -28,11 +35,11 @@ if (!process.env.JWT_SECRET) {
 }
 
 /** Returns true if user management is active (at least one user exists).
- *  Always true behind a hub: an empty users table must not turn into
- *  single-user mode, where every request is the owner and the first
- *  /register becomes admin. */
+ *  Always true behind a hub, and while hub accounts exist with HUB_JWKS
+ *  unset: an empty users table must not turn into single-user mode, where
+ *  every request is the owner and the first /register becomes admin. */
 export function userMgmtActive() {
-  if (hubMode()) return true;
+  if (hubInstance()) return true;
   return db.prepare('SELECT 1 FROM users LIMIT 1').get() != null;
 }
 
@@ -81,7 +88,7 @@ const _isApiV1 = path => path === '/api/v1' || path.startsWith('/api/v1/');
 /** The credential of an `Authorization: Bearer <token>` header, or null.
  *  The scheme is case-insensitive (RFC 7235): `bearer <hub token>` must
  *  reach the hub check rather than slip past it to the cookie. */
-export function bearerToken(header) {
+function bearerToken(header) {
   const m = typeof header === 'string' ? header.match(/^Bearer[ \t]+(\S+)[ \t]*$/i) : null;
   return m ? m[1] : null;
 }
