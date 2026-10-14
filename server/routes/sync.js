@@ -18,6 +18,7 @@ import { isServerOnlyKey } from '../lib/server-only-keys.js';
 import { localizeImage, isExternalUrl } from '../lib/image-localizer.js';
 import { mirrorWeightToBodyStats } from '../lib/wellness-mirror.js';
 import { cleanCreateKey, findByCreateKey, setCreateKey } from '../lib/create-keys.js';
+import { BRIDGE_SOURCE, isIntegrationRow } from '../lib/active-calories.js';
 import { clientClock, parseUtc, pushWins as clockPushWins, editStamp, resolveNote } from '../lib/sync-clock.js';
 
 // #199 (@tellis82): the POST /api/foods and POST /api/meals routes
@@ -532,21 +533,34 @@ router.post('/push', wrap(async (req, res) => {
         ? Math.max(0, Math.min(25, Number(a.met))) : null;
       const isTplVal = a.is_template ? 1 : 0;
       const existing = a.server_id
-        ? db.prepare('SELECT updated_at, created_at, user_id FROM activity_log WHERE id = ?').get(a.server_id)
+        ? db.prepare('SELECT updated_at, created_at, user_id, name, kcal, duration_min, distance, date, source, external_id FROM activity_log WHERE id = ?').get(a.server_id)
         : null;
       if (a.server_id && existing) {
         // Only this account's own row changes (as PUT /api/... does); anyone
         // else's is answered as if the push lost the time check.
         if (_ownsRow(existing, u) && pushWins(a.updated_at, existing.updated_at, existing)) {
+          // A bridge row changed or deleted on the phone is the person's
+          // edit, which the bridge never writes over (as in routes/activity.js).
+          const bridgeRow = existing.source === BRIDGE_SOURCE;
           if (a.deleted_at) {
-            db.prepare(`UPDATE activity_log SET deleted_at = datetime('now'), updated_at = ? WHERE id = ?`).run(stamp(a.updated_at, existing), a.server_id);
+            db.prepare(`UPDATE activity_log SET deleted_at = datetime('now'), updated_at = ?, user_edited_at = CASE WHEN ? THEN datetime('now') ELSE user_edited_at END WHERE id = ?`)
+              .run(stamp(a.updated_at, existing), bridgeRow ? 1 : 0, a.server_id);
           } else {
+            const next = {
+              name: a.name,
+              kcal: Math.max(0, Math.round(Number(a.kcal) || 0)),
+              duration_min: a.duration_min != null ? Math.max(0, Math.round(Number(a.duration_min))) : null,
+              distance: a.distance != null ? String(a.distance).slice(0, 40) : null,
+              date: a.date,
+            };
+            const edited = bridgeRow && Object.keys(next).some(k => next[k] !== existing[k]);
+            // An integration's row keeps its source, whatever the phone says.
+            const source = isIntegrationRow(existing) ? existing.source : (a.source || 'manual_form');
             db.prepare(
-              `UPDATE activity_log SET name=?, kcal=?, duration_min=?, distance=?, source=?, met=?, is_template=?, date=?, updated_at=? WHERE id=?`
-            ).run(a.name, Math.max(0, Math.round(Number(a.kcal) || 0)),
-              a.duration_min != null ? Math.max(0, Math.round(Number(a.duration_min))) : null,
-              a.distance != null ? String(a.distance).slice(0, 40) : null,
-              a.source || 'manual_form', metVal, isTplVal, a.date, stamp(a.updated_at, existing), a.server_id);
+              `UPDATE activity_log SET name=?, kcal=?, duration_min=?, distance=?, source=?, met=?, is_template=?, date=?, updated_at=?,
+                      user_edited_at = CASE WHEN ? THEN datetime('now') ELSE user_edited_at END WHERE id=?`
+            ).run(next.name, next.kcal, next.duration_min, next.distance,
+              source, metVal, isTplVal, next.date, stamp(a.updated_at, existing), edited ? 1 : 0, a.server_id);
           }
           result.activity.push({ client_id: a.client_id, server_id: a.server_id });
         } else if (_ownsRow(existing, u)) {

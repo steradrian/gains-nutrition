@@ -2,7 +2,9 @@ import { Router } from 'express';
 import db from '../db.js';
 import { wrap } from '../logger.js';
 import { requireAuth, userMgmtActive } from '../middleware/auth.js';
-import { sumManualActivity, wearableActiveCalories, effectiveActiveCalories } from '../lib/active-calories.js';
+import {
+  BRIDGE_SOURCE, isIntegrationRow, sumManualActivity, wearableActivity, effectiveActiveCalories, withCoverage,
+} from '../lib/active-calories.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -33,19 +35,26 @@ router.get('/:date', wrap((req, res) => {
   const rows = u == null
     ? db.prepare(`SELECT * FROM activity_log WHERE user_id IS NULL AND date = ? AND deleted_at IS NULL ORDER BY id ASC`).all(req.params.date)
     : db.prepare(`SELECT * FROM activity_log WHERE user_id = ? AND date = ? AND deleted_at IS NULL ORDER BY id ASC`).all(u, req.params.date);
-  res.json(rows);
+  res.json(withCoverage(u, rows));
 }));
 
 // Sum + effective-calories breakdown for a date.
 // Used by Diary header to show "X kcal earned today" and by AI tools.
+// covered_by names the wearable that stands in for the day's bridge rows
+// (null when there are none, or no wearable reports).
 router.get('/sum/:date', wrap((req, res) => {
   const u = uid(req);
   const policy = String(req.query.policy || 'wearable_wins');
+  const wearable = wearableActivity(u, req.params.date);
+  const hasBridgeRows = !!wearable && (u == null
+    ? db.prepare(`SELECT 1 FROM activity_log WHERE user_id IS NULL AND date = ? AND source = ? AND deleted_at IS NULL`).get(req.params.date, BRIDGE_SOURCE)
+    : db.prepare(`SELECT 1 FROM activity_log WHERE user_id = ? AND date = ? AND source = ? AND deleted_at IS NULL`).get(u, req.params.date, BRIDGE_SOURCE));
   res.json({
     date: req.params.date,
     manual: sumManualActivity(u, req.params.date),
-    wearable: wearableActiveCalories(u, req.params.date),
+    wearable: wearable?.kcal ?? 0,
     effective: effectiveActiveCalories(u, req.params.date, policy),
+    covered_by: hasBridgeRows ? wearable.source : null,
     policy,
   });
 }));
@@ -59,7 +68,7 @@ router.get('/', wrap((req, res) => {
   const rows = u == null
     ? db.prepare(`SELECT * FROM activity_log WHERE user_id IS NULL AND date BETWEEN ? AND ? AND deleted_at IS NULL ORDER BY date ASC, id ASC`).all(from, to)
     : db.prepare(`SELECT * FROM activity_log WHERE user_id = ? AND date BETWEEN ? AND ? AND deleted_at IS NULL ORDER BY date ASC, id ASC`).all(u, from, to);
-  res.json(rows);
+  res.json(withCoverage(u, rows));
 }));
 
 router.post('/', wrap((req, res) => {
@@ -82,20 +91,31 @@ router.put('/:id', wrap((req, res) => {
     ? db.prepare(`SELECT * FROM activity_log WHERE id = ? AND user_id IS NULL AND deleted_at IS NULL`).get(id)
     : db.prepare(`SELECT * FROM activity_log WHERE id = ? AND user_id = ? AND deleted_at IS NULL`).get(id, u);
   if (!existing) return res.status(404).json({ error: 'Not found' });
-  const { name, kcal, duration_min, distance, source, met, is_template } = sanitize({ ...existing, ...req.body });
+  const fields = sanitize({ ...existing, ...req.body });
+  const { name, kcal, duration_min, distance, met, is_template } = fields;
+  const source = isIntegrationRow(existing) ? existing.source : fields.source;
+  // A person's edit to a bridge row is theirs: the bridge never writes
+  // over it again.
+  const edited = existing.source === BRIDGE_SOURCE
+    && ['name', 'kcal', 'duration_min', 'distance'].some(k => fields[k] !== existing[k]);
   db.prepare(`
-    UPDATE activity_log SET name = ?, kcal = ?, duration_min = ?, distance = ?, source = ?, met = ?, is_template = ?, updated_at = datetime('now')
+    UPDATE activity_log SET name = ?, kcal = ?, duration_min = ?, distance = ?, source = ?, met = ?, is_template = ?,
+           user_edited_at = CASE WHEN ? THEN datetime('now') ELSE user_edited_at END, updated_at = datetime('now')
     WHERE id = ?
-  `).run(name, kcal, duration_min, distance, source, met, is_template, id);
+  `).run(name, kcal, duration_min, distance, source, met, is_template, edited ? 1 : 0, id);
   res.json(db.prepare(`SELECT * FROM activity_log WHERE id = ?`).get(id));
 }));
 
 router.delete('/:id', wrap((req, res) => {
   const u = uid(req);
   const id = Number(req.params.id);
+  // Deleting a bridge row in the app is an edit too: the bridge does not
+  // bring it back.
+  const set = `deleted_at = datetime('now'), updated_at = datetime('now'),
+               user_edited_at = CASE WHEN source = '${BRIDGE_SOURCE}' THEN datetime('now') ELSE user_edited_at END`;
   const sql = u == null
-    ? `UPDATE activity_log SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND user_id IS NULL AND deleted_at IS NULL`
-    : `UPDATE activity_log SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND user_id = ? AND deleted_at IS NULL`;
+    ? `UPDATE activity_log SET ${set} WHERE id = ? AND user_id IS NULL AND deleted_at IS NULL`
+    : `UPDATE activity_log SET ${set} WHERE id = ? AND user_id = ? AND deleted_at IS NULL`;
   const r = u == null ? db.prepare(sql).run(id) : db.prepare(sql).run(id, u);
   if (r.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ ok: true });

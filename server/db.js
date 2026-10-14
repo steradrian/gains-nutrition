@@ -895,6 +895,48 @@ if (!columnExists('activity_log', 'is_template')) {
   db.exec(`ALTER TABLE activity_log ADD COLUMN is_template INTEGER DEFAULT 0`);
 }
 
+// activity_log: the integration key of POST /api/v1/activity gets its own
+// column. Until now it lived in source as 'external:<id>', which an edit in
+// the app reset to 'manual_form' (and with it the key), and nothing stopped
+// two posts of one id from making two rows. The key is unique per owner
+// (NULL owner counted as 0, since SQLite treats NULLs as distinct), deleted
+// rows included, so a key names one row for good: a re-post after a delete
+// brings that row back rather than making another. Earlier duplicates are
+// folded first: the live row with the highest id keeps the key, the others
+// are soft-deleted and lose it.
+// user_edited_at: when the person changed or deleted a bridge row
+// (source 'opengym') in the app; the bridge never writes over it.
+if (!columnExists('activity_log', 'external_id')) {
+  // One transaction: a crash between the two must not leave the column
+  // in place with the keys still in source.
+  db.transaction(() => {
+    db.exec(`ALTER TABLE activity_log ADD COLUMN external_id TEXT DEFAULT NULL`);
+    db.exec(`UPDATE activity_log SET external_id = substr(source, 10), source = 'external' WHERE source LIKE 'external:%'`);
+  })();
+}
+if (!columnExists('activity_log', 'user_edited_at')) {
+  db.exec(`ALTER TABLE activity_log ADD COLUMN user_edited_at TEXT DEFAULT NULL`);
+}
+if (!db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_activity_external'`).get()) {
+  db.transaction(() => {
+    db.exec(`
+      WITH ranked AS (
+        SELECT id, ROW_NUMBER() OVER (
+          PARTITION BY IFNULL(user_id, 0), external_id
+          ORDER BY (deleted_at IS NULL) DESC, id DESC
+        ) AS n
+        FROM activity_log WHERE external_id IS NOT NULL
+      )
+      UPDATE activity_log
+         SET external_id = NULL,
+             deleted_at = COALESCE(deleted_at, datetime('now')),
+             updated_at = datetime('now')
+       WHERE id IN (SELECT id FROM ranked WHERE n > 1)
+    `);
+    db.exec(`CREATE UNIQUE INDEX idx_activity_external ON activity_log(IFNULL(user_id, 0), external_id) WHERE external_id IS NOT NULL`);
+  })();
+}
+
 // Indexes for sync queries
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_foods_updated ON foods(updated_at);

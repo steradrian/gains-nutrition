@@ -1,7 +1,7 @@
 /**
- * POST /api/v1/activity — log a manual activity entry into the diary
- * from an external integration (self-hosted trackers, Dropbox → TCX
- * pipelines, Node-RED, Gadgetbridge, etc.).
+ * /api/v1/activity — log manual activity entries into the diary from an
+ * external integration (self-hosted trackers, Dropbox → TCX pipelines,
+ * Node-RED, Gadgetbridge, the openGym bridge, etc.).
  *
  * Storage: activity_log table (same table the in-app "Add Activity"
  * sheet writes to). Renders in the diary's Activity section and
@@ -17,113 +17,210 @@
  * should feed the dynamic-TDEE calorie goal; use `/api/v1/activity`
  * for anything that should appear as a diary Activity row.
  *
- * Wire contract:
+ * Routes (all scope write:activity):
+ *   POST   /                        one entry, upserted on external_id
+ *   POST   /batch                   up to 100 upserts and deletes
+ *   DELETE /external/:external_id   soft-delete the entry with that key
+ *
+ * Entry:
  *   {
- *     date:          "YYYY-MM-DD",        // required
+ *     date:          "YYYY-MM-DD",        // required, the owner's local day
  *     name:          "Bicycle",           // required, free text, <=80 chars
  *     kcal:          270,                 // required, kilocalories burned
  *     duration_min:  40,                  // optional
  *     distance:      "12.4 km",           // optional, free text, <=40 chars
- *     external_id:   "external:workout:<uuid>"  // optional idempotency key
+ *     external_id:   "og:w:lq2k9x7a1b",   // optional idempotency key, <=128 chars
+ *     source:        "opengym"            // optional; only "opengym" means anything
  *   }
  *
- * When `external_id` is present, re-posting the same id updates the
- * existing row in place instead of duplicating. The id is namespaced
- * per user so different integrations can pick their own conventions
- * without collision.
+ * external_id names one row per user for good (a unique index, deleted
+ * rows included): re-posting it updates that row in place, a post after a
+ * delete brings the row back, and nothing ever makes a second row for it.
+ * source "opengym" marks the openGym bridge's rows: on a day a wearable
+ * reports active calories they are shown but not counted
+ * (lib/active-calories.js). Once the person edits or deletes such a row in
+ * the app, upserts leave it alone and answer status "user_edited".
  */
 import { Router } from 'express';
 import db from '../../../db.js';
 import { wrap } from '../../../logger.js';
 import { requireScope } from '../../../middleware/bearer-auth.js';
+import { BRIDGE_SOURCE } from '../../../lib/active-calories.js';
+import { isCalendarDate } from '../../../lib/mcp/_util.js';
 
 const router = Router();
 
-router.post('/', requireScope('write:activity'), wrap((req, res) => {
-  const { date, name, kcal, duration_min, distance, external_id } = req.body || {};
+export const BATCH_MAX_ITEMS = 100;
+const EXTERNAL_ID_MAX = 128;
 
-  // ── Validate ─────────────────────────────────────────────────────────
-  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) {
-    return res.status(400).json({ error: 'date must be YYYY-MM-DD', code: 'bad_date' });
+const _invalid = (code, error) => ({ invalid: { code, error } });
+
+function _externalId(raw) {
+  if (raw == null || raw === '') return { value: null };
+  if (typeof raw !== 'string' && !(typeof raw === 'number' && Number.isFinite(raw))) {
+    return _invalid('bad_external_id', 'external_id must be a string');
   }
+  const value = String(raw).trim();
+  if (!value || value.length > EXTERNAL_ID_MAX) {
+    return _invalid('bad_external_id', `external_id must be 1..${EXTERNAL_ID_MAX} characters`);
+  }
+  return { value };
+}
+
+/** Validate one entry: { value } or { invalid: { code, error } }. */
+function _parseEntry(body) {
+  const { date, name, kcal, duration_min, distance, external_id, source } = body || {};
+  if (typeof date !== 'string' || !isCalendarDate(date)) return _invalid('bad_date', 'date must be YYYY-MM-DD');
   const cleanName = String(name || '').trim().slice(0, 80);
-  if (!cleanName) {
-    return res.status(400).json({ error: 'name required', code: 'bad_name' });
-  }
+  if (!cleanName) return _invalid('bad_name', 'name required');
   const kcalNum = Number(kcal);
   if (!Number.isFinite(kcalNum) || kcalNum < 0 || kcalNum > 10000) {
-    return res.status(400).json({ error: 'kcal must be a number 0..10000', code: 'bad_kcal' });
+    return _invalid('bad_kcal', 'kcal must be a number 0..10000');
   }
   let dur = null;
   if (duration_min != null) {
     const d = Number(duration_min);
-    if (!Number.isFinite(d) || d < 0 || d > 1440) {
-      return res.status(400).json({ error: 'duration_min must be 0..1440', code: 'bad_duration' });
-    }
+    if (!Number.isFinite(d) || d < 0 || d > 1440) return _invalid('bad_duration', 'duration_min must be 0..1440');
     dur = Math.round(d);
   }
-  const cleanDistance = distance != null ? String(distance).trim().slice(0, 40) || null : null;
-  const extId = external_id ? String(external_id).slice(0, 128) : null;
+  const ext = _externalId(external_id);
+  if (ext.invalid) return ext;
+  return {
+    value: {
+      date,
+      name: cleanName,
+      kcal: Math.round(kcalNum),
+      duration_min: dur,
+      distance: distance != null ? String(distance).trim().slice(0, 40) || null : null,
+      external_id: ext.value,
+      source: source === BRIDGE_SOURCE ? BRIDGE_SOURCE : 'external',
+    },
+  };
+}
 
-  const userId = req.apiUser.id;
-  const u = (userId === 0 || userId == null) ? null : userId;
-  const roundedKcal = Math.max(0, Math.round(kcalNum));
+// Single-user mode stores rows under user_id NULL; the unique index counts
+// that owner as 0.
+const _owner = req => {
+  const id = req.apiUser.id;
+  return (id === 0 || id == null) ? null : id;
+};
 
-  // ── Insert or upsert on external_id ──────────────────────────────────
-  // Without external_id: plain insert (integration doesn't need
-  // idempotency, or callers just want to append). With external_id:
-  // look up existing row with the same (user, external_id) namespace
-  // and update in place. The namespace key lives in activity_log's
-  // `source` column encoded as `external:<id>` — activity_log
-  // doesn't have a dedicated external_id column, and adding one for a
-  // single caller isn't worth the schema churn.
-  const sourceValue = extId ? `external:${extId}` : 'external';
+const _byKey = db.prepare(`SELECT * FROM activity_log WHERE IFNULL(user_id, 0) = ? AND external_id = ?`);
+const _byId = db.prepare(`SELECT * FROM activity_log WHERE id = ?`);
+const _insert = db.prepare(`
+  INSERT INTO activity_log (
+    user_id, date, name, kcal, duration_min, distance,
+    source, external_id, met, is_template, created_at, updated_at
+  )
+  VALUES (@user_id, @date, @name, @kcal, @duration_min, @distance, @source, @external_id, NULL, 0, datetime('now'), datetime('now'))
+`);
+const _update = db.prepare(`
+  UPDATE activity_log
+     SET date = @date, name = @name, kcal = @kcal, duration_min = @duration_min, distance = @distance,
+         source = @source, deleted_at = NULL, updated_at = datetime('now')
+   WHERE id = @id
+`);
+const _softDelete = db.prepare(`UPDATE activity_log SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`);
 
-  let existingId = null;
-  if (extId) {
-    const stmt = u == null
-      ? db.prepare(`SELECT id FROM activity_log WHERE user_id IS NULL AND source = ? AND deleted_at IS NULL`)
-      : db.prepare(`SELECT id FROM activity_log WHERE user_id = ? AND source = ? AND deleted_at IS NULL`);
-    const row = u == null ? stmt.get(sourceValue) : stmt.get(u, sourceValue);
-    existingId = row?.id ?? null;
+const CONTENT = ['date', 'name', 'kcal', 'duration_min', 'distance', 'source'];
+
+/**
+ * Write one validated entry. Returns { status, row } where status is
+ * created | updated | unchanged | user_edited. Callers run it inside a
+ * transaction, so the lookup and the write cannot interleave.
+ */
+function _upsert(owner, entry) {
+  if (entry.external_id == null) {
+    const r = _insert.run({ user_id: owner, ...entry });
+    return { status: 'created', row: _byId.get(r.lastInsertRowid) };
   }
-
-  if (existingId) {
-    db.prepare(`
-      UPDATE activity_log
-         SET date = ?, name = ?, kcal = ?, duration_min = ?, distance = ?,
-             updated_at = datetime('now')
-       WHERE id = ?
-    `).run(date, cleanName, roundedKcal, dur, cleanDistance, existingId);
-  } else {
-    db.prepare(`
-      INSERT INTO activity_log (
-        user_id, date, name, kcal, duration_min, distance,
-        source, met, is_template, created_at, updated_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 0, datetime('now'), datetime('now'))
-    `).run(u, date, cleanName, roundedKcal, dur, cleanDistance, sourceValue);
+  const current = _byKey.get(owner ?? 0, entry.external_id);
+  if (!current) {
+    const r = _insert.run({ user_id: owner, ...entry });
+    return { status: 'created', row: _byId.get(r.lastInsertRowid) };
   }
+  if (current.user_edited_at != null) return { status: 'user_edited', row: current };
+  if (current.deleted_at == null && CONTENT.every(k => current[k] === entry[k])) {
+    return { status: 'unchanged', row: current };
+  }
+  _update.run({ id: current.id, ...entry });
+  return { status: current.deleted_at == null ? 'updated' : 'created', row: _byId.get(current.id) };
+}
 
-  const stored = u == null
-    ? db.prepare(`SELECT * FROM activity_log WHERE user_id IS NULL AND source = ? AND date = ? AND deleted_at IS NULL ORDER BY id DESC LIMIT 1`).get(sourceValue, date)
-    : db.prepare(`SELECT * FROM activity_log WHERE user_id = ? AND source = ? AND date = ? AND deleted_at IS NULL ORDER BY id DESC LIMIT 1`).get(u, sourceValue, date);
+/** Soft-delete the row with this key. { status: deleted | not_found, row }. */
+function _remove(owner, externalId) {
+  const current = _byKey.get(owner ?? 0, externalId);
+  if (!current || current.deleted_at != null) return { status: 'not_found', row: null };
+  _softDelete.run(current.id);
+  return { status: 'deleted', row: _byId.get(current.id) };
+}
 
-  // Report the day's cumulative manual activity kcal so callers can
-  // sanity-check their pipeline. Matches the shape of the /workouts
-  // response (which reports daily_total_calories_burned for the
-  // wellness_data rollup).
-  const dailyTotalRow = u == null
+/** The day's cumulative activity kcal, so callers can sanity-check their
+ *  pipeline (matches daily_total_calories_burned on /workouts). */
+function _dailyTotal(owner, date) {
+  const row = owner == null
     ? db.prepare(`SELECT COALESCE(SUM(kcal), 0) AS total FROM activity_log WHERE user_id IS NULL AND date = ? AND deleted_at IS NULL`).get(date)
-    : db.prepare(`SELECT COALESCE(SUM(kcal), 0) AS total FROM activity_log WHERE user_id = ? AND date = ? AND deleted_at IS NULL`).get(u, date);
+    : db.prepare(`SELECT COALESCE(SUM(kcal), 0) AS total FROM activity_log WHERE user_id = ? AND date = ? AND deleted_at IS NULL`).get(owner, date);
+  return Math.round(row?.total ?? 0);
+}
 
-  res.status(existingId ? 200 : 201).json({
+router.post('/', requireScope('write:activity'), wrap((req, res) => {
+  const parsed = _parseEntry(req.body);
+  if (parsed.invalid) return res.status(400).json(parsed.invalid);
+  const owner = _owner(req);
+  const { status, row } = db.transaction(() => _upsert(owner, parsed.value))();
+  res.status(status === 'created' ? 201 : 200).json({
     ok: true,
-    activity_id: stored?.id ?? null,
-    date,
-    kcal: roundedKcal,
-    daily_total_kcal: Math.round(dailyTotalRow?.total ?? 0),
-    updated: !!existingId,
+    status,
+    activity_id: row.id,
+    date: row.date,
+    kcal: row.kcal,
+    daily_total_kcal: _dailyTotal(owner, row.date),
+    updated: status === 'updated' || status === 'unchanged',
+  });
+}));
+
+router.post('/batch', requireScope('write:activity'), wrap((req, res) => {
+  const items = req.body?.items;
+  if (!Array.isArray(items)) return res.status(400).json({ error: 'items must be an array', code: 'bad_body' });
+  if (items.length > BATCH_MAX_ITEMS) {
+    return res.status(400).json({ error: `at most ${BATCH_MAX_ITEMS} items per batch`, code: 'too_many_items' });
+  }
+  const owner = _owner(req);
+  const results = db.transaction(() => items.map((item) => {
+    const ext = _externalId(item?.external_id);
+    const externalId = ext.value ?? null;
+    if (ext.invalid || externalId == null) {
+      return { external_id: externalId, status: 'error', code: 'bad_external_id', error: 'external_id required' };
+    }
+    const op = item.op ?? 'upsert';
+    if (op === 'delete') {
+      const { status, row } = _remove(owner, externalId);
+      return { external_id: externalId, status, activity_id: row?.id ?? null };
+    }
+    if (op !== 'upsert') return { external_id: externalId, status: 'error', code: 'bad_op', error: 'op must be upsert or delete' };
+    const parsed = _parseEntry(item);
+    if (parsed.invalid) return { external_id: externalId, status: 'error', ...parsed.invalid };
+    const { status, row } = _upsert(owner, parsed.value);
+    return { external_id: externalId, status, activity_id: row.id };
+  }))();
+  res.json({ ok: true, results });
+}));
+
+router.delete('/external/:external_id', requireScope('write:activity'), wrap((req, res) => {
+  const ext = _externalId(req.params.external_id);
+  if (ext.invalid) return res.status(400).json(ext.invalid);
+  const owner = _owner(req);
+  const { status, row } = db.transaction(() => _remove(owner, ext.value))();
+  if (status === 'not_found') {
+    return res.json({ ok: true, deleted: false, activity_id: null, date: null, daily_total_kcal: null });
+  }
+  res.json({
+    ok: true,
+    deleted: true,
+    activity_id: row.id,
+    date: row.date,
+    daily_total_kcal: _dailyTotal(owner, row.date),
   });
 }));
 

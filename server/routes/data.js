@@ -3,11 +3,17 @@ import db from '../db.js';
 import { wrap } from '../logger.js';
 import { requireAuth, userMgmtActive } from '../middleware/auth.js';
 import { ensureUuids } from '../lib/diary-merge.js';
+import { BRIDGE_SOURCE } from '../lib/active-calories.js';
 
 const router = Router();
 router.use(requireAuth);
 
 const uid = req => userMgmtActive() ? req.user.id : null;
+
+// Clearing everything is the person deleting their bridge rows too, so the
+// openGym bridge does not bring them back (routes/api/v1/activity.js).
+const ACTIVITY_WIPE = `deleted_at = datetime('now'), updated_at = datetime('now'),
+  user_edited_at = CASE WHEN source = '${BRIDGE_SOURCE}' THEN datetime('now') ELSE user_edited_at END`;
 
 // Clear all app data (scoped to current user). Rows phones mirror go by
 // deleted_at, or for wellness and workouts through sync_deletions (db.js),
@@ -18,7 +24,7 @@ router.delete('/', wrap((req, res) => {
     db.prepare(`UPDATE foods SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE deleted_at IS NULL`).run();
     db.prepare(`UPDATE meals SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE deleted_at IS NULL`).run();
     db.prepare(`UPDATE diary SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE deleted_at IS NULL`).run();
-    db.prepare(`UPDATE activity_log SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE deleted_at IS NULL`).run();
+    db.prepare(`UPDATE activity_log SET ${ACTIVITY_WIPE} WHERE deleted_at IS NULL`).run();
     db.prepare(`UPDATE fasts SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE deleted_at IS NULL`).run();
     db.prepare(`DELETE FROM wellness_data`).run();
     db.prepare(`DELETE FROM workouts`).run();
@@ -27,7 +33,7 @@ router.delete('/', wrap((req, res) => {
     db.prepare(`UPDATE foods SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE user_id = ? AND deleted_at IS NULL`).run(u);
     db.prepare(`UPDATE meals SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE user_id = ? AND deleted_at IS NULL`).run(u);
     db.prepare(`UPDATE diary SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE user_id = ? AND deleted_at IS NULL`).run(u);
-    db.prepare(`UPDATE activity_log SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE user_id = ? AND deleted_at IS NULL`).run(u);
+    db.prepare(`UPDATE activity_log SET ${ACTIVITY_WIPE} WHERE user_id = ? AND deleted_at IS NULL`).run(u);
     db.prepare(`UPDATE fasts SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE user_id = ? AND deleted_at IS NULL`).run(u);
     db.prepare(`DELETE FROM wellness_data WHERE user_id = ?`).run(u);
     db.prepare(`DELETE FROM workouts WHERE user_id = ?`).run(u);

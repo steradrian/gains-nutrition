@@ -332,6 +332,21 @@ test('csrfProtect lets a hub session through even when its user carries a csrf v
 });
 
 // ── Bad tokens: 401, never the cookie ─────────────────────────────────────
+// The same signature spelled another way: 64 bytes take 86 base64url
+// characters, and the last one carries 4 unused bits that a lenient
+// decoder ignores. Flipping the lowest of them keeps the bytes.
+const B64URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+// The same trick works on any segment whose length is not a multiple of
+// 4 (a whole number of bytes leaves no spare bits otherwise).
+function respell(token, index = 2) {
+  const parts = token.split('.');
+  const seg = parts[index];
+  assert.notEqual(seg.length % 4, 0, `segment ${index} has spare bits`);
+  const twin = seg.slice(0, -1) + B64URL[B64URL.indexOf(seg.at(-1)) ^ 1];
+  assert.deepEqual(Buffer.from(twin, 'base64url'), Buffer.from(seg, 'base64url'), 'same bytes');
+  parts[index] = twin;
+  return parts.join('.');
+}
 const hmac = (claims) => {
   const input = `${b64({ alg: 'HS256', kid: 'k1', typ: 'JWT' })}.${b64(claims)}`;
   const secret = JSON.stringify(jwk(k1, 'k1'));
@@ -355,6 +370,10 @@ const BAD = {
   'no sub':                   () => tokenFor(''),
   'unknown scope':            () => tokenFor('og-bad', { scope: 'admin' }),
   'crit header':              () => sign(claimsFor('og-bad'), { header: { crit: ['exp'] } }),
+  'non-canonical signature':  () => respell(tokenFor('og-bad')),
+  'no jti':                   () => tokenFor('og-bad', { jti: undefined }),
+  'jti under 128 bits':       () => tokenFor('og-bad', { jti: crypto.randomBytes(8).toString('base64url') }),
+  'jti not base64url':        () => tokenFor('og-bad', { jti: `${crypto.randomBytes(16).toString('base64url')}+/` }),
 };
 
 for (const [name, make] of Object.entries(BAD)) {
@@ -377,6 +396,92 @@ test('iat up to 30 s ahead (clock skew) is accepted', async (t) => {
   assert.equal((await call('/api/whoami', { token: tokenFor('og-skew', { iat: now() + 25, exp: now() + 60 }) })).status, 200);
 });
 
+test('a replayed jti is refused: the same token works once', async (t) => {
+  hubOn();
+  const token = tokenFor('og-replay');
+  assert.equal((await call('/api/whoami', { token })).status, 200);
+  const again = await call('/api/whoami', { token });
+  assert.equal(again.status, 401);
+  assert.equal(again.body.code, 'hub_token_invalid');
+  // A fresh token (new jti) for the same person is fine.
+  assert.equal((await call('/api/whoami', { token: tokenFor('og-replay') })).status, 200);
+
+  const sync = tokenFor('og-replay', { scope: 'sync', act: 'bridge' });
+  const body = { date: '2026-10-14', name: 'Run', kcal: 300, external_id: 'og:w:replay' };
+  assert.equal((await call('/api/v1/activity', { method: 'POST', token: sync, body })).status, 201);
+  assert.equal((await call('/api/v1/activity', { method: 'POST', token: sync, body })).status, 401);
+});
+
+test('a replayed jti is refused by verifyHubToken until its token expires', () => {
+  hubOn();
+  const config = mods.hub.hubConfig();
+  const nowS = now();
+  const token = tokenFor('og-replay-unit', { iat: nowS, exp: nowS + 60 });
+  assert.equal(mods.hub.verifyHubToken(token, config, nowS).ok, true);
+  assert.equal(mods.hub.verifyHubToken(token, config, nowS + 30).reason, 'replay');
+  // Past exp it is refused as expired, whatever the cache holds.
+  assert.equal(mods.hub.verifyHubToken(token, config, nowS + 61).reason, 'expired');
+});
+
+test('the replay cache outlives exp by the clock skew, then lets the entry go', () => {
+  hubOn();
+  const config = mods.hub.hubConfig();
+  const t0 = now() + 1000; // ahead of every other test's entries
+  // Signed 30 s ahead (the skew allows it): valid until t0 + 90.
+  const ahead = tokenFor('og-cache', { iat: t0 + 30, exp: t0 + 90 });
+  assert.equal(mods.hub.verifyHubToken(ahead, config, t0).ok, true);
+  assert.equal(mods.hub.verifyHubToken(ahead, config, t0 + 89).reason, 'replay', 'blocked for its whole life');
+
+  // Another verify 100 s on, past its exp, does not trim it yet (kept to
+  // exp + 30)...
+  assert.equal(mods.hub.verifyHubToken(tokenFor('og-cache', { iat: t0 + 100, exp: t0 + 160 }), config, t0 + 100).ok, true);
+  // ...so a clock stepped back 20 s still finds it.
+  assert.equal(mods.hub.verifyHubToken(ahead, config, t0 + 80).reason, 'replay', 'a clock stepped back does not reopen it');
+
+  // Once every entry is past exp + 30, the next verify trims them all.
+  assert.equal(mods.hub.verifyHubToken(tokenFor('og-cache', { iat: t0 + 300, exp: t0 + 360 }), config, t0 + 300).ok, true);
+  assert.equal(mods.hub.replayCacheSize(), 1, 'only the newest entry is left');
+});
+
+test('jti length bounds: 22..128 base64url characters', () => {
+  hubOn();
+  const config = mods.hub.hubConfig();
+  const jti = n => crypto.randomBytes(n).toString('base64url').slice(0, n);
+  const reason = n => mods.hub.verifyHubToken(tokenFor('og-jti', { jti: jti(n) }), config).reason ?? 'ok';
+  assert.equal(reason(21), 'jti');
+  assert.equal(reason(22), 'ok');
+  assert.equal(reason(128), 'ok');
+  assert.equal(reason(129), 'jti');
+});
+
+test('a non-canonical spelling of any segment is refused even though its bytes verify', () => {
+  hubOn();
+  const config = mods.hub.hubConfig();
+  // Pad the name until the payload segment has spare bits to flip.
+  let claims = claimsFor('og-respell');
+  while (b64(claims).length % 4 === 0) claims = { ...claims, name: `${claims.name}x` };
+  for (const index of [0, 1, 2]) {
+    assert.equal(mods.hub.verifyHubToken(respell(sign(claims), index), config).reason, 'encoding', `segment ${index}`);
+    claims = { ...claims, jti: crypto.randomBytes(16).toString('base64url') };
+  }
+});
+
+test('scope=user never reaches /api/v1, the bridge routes included', async (t) => {
+  hubOn();
+  const user = () => tokenFor('og-user-v1');
+  for (const [method, path, body] of [
+    ['GET', '/api/v1/body-stats'],
+    ['POST', '/api/v1/activity', { date: '2026-10-14', name: 'Run', kcal: 1, external_id: 'og:w:u' }],
+    ['POST', '/api/v1/activity/batch', { items: [] }],
+    ['DELETE', '/api/v1/activity/external/og:w:u'],
+    ['POST', '/api/v1/body-measurements', { date: '2026-10-14', weight: 80 }],
+  ]) {
+    const res = await call(path, { method, token: user(), body });
+    assert.equal(res.status, 401, `${method} ${path}`);
+    assert.equal(res.body.code, 'auth_invalid');
+  }
+});
+
 test("a bearer that isn't the hub's is still left to the cookie (upstream)", async (t) => {
   hubOn();
   const cookieUser = localUser(`cookie-${crypto.randomUUID()}`);
@@ -394,11 +499,12 @@ test('scope=sync reaches /api/v1 with exactly the three sync scopes', async (t) 
   const posted = await call('/api/v1/activity', { method: 'POST', token: sync(), body: { date: '2026-10-14', name: 'Run', kcal: 300, external_id: 'og:1' } });
   assert.ok(posted.status >= 200 && posted.status < 300, `activity: ${posted.status}`);
   const userId = db.prepare('SELECT user_id FROM user_hub_links WHERE sub = ?').get('og-sync').user_id;
-  assert.equal(db.prepare(`SELECT COUNT(*) n FROM activity_log WHERE user_id = ? AND source = 'external:og:1'`).get(userId).n, 1);
+  assert.equal(db.prepare(`SELECT COUNT(*) n FROM activity_log WHERE user_id = ? AND external_id = 'og:1' AND source = 'external'`).get(userId).n, 1);
 
   const measured = await call('/api/v1/body-measurements', { method: 'POST', token: sync(), body: {} });
   assert.notEqual(measured.status, 401);
   assert.notEqual(measured.status, 403);
+  assert.equal((await call('/api/v1/body-stats', { token: sync() })).status, 200, 'read:body-stats');
 
   const foods = await call('/api/v1/foods', { token: sync() });
   assert.equal(foods.status, 403);

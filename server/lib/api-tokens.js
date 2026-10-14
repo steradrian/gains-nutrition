@@ -31,7 +31,9 @@ const TOKEN_BYTES = 32;  // 256-bit secret
 export const SCOPE_DESCRIPTIONS = {
   'read:foods':      "Read the token owner's foods library. Used by CookTrace federation.",
   'write:workouts':  "Post workouts into the token owner's wellness history. Used by LiftTrace federation.",
-  'write:activity':  "Log manual activity entries into the diary Activity section. Used by external trackers and headless integrations (issue #154).",
+  'write:activity':  "Log manual activity entries into the diary Activity section, and update or delete the ones the integration made. Used by external trackers, headless integrations (issue #154) and the openGym bridge.",
+  'write:body-measurements': "Record scale readings (weight, body composition) into the diary's body stats and Wellness. Used by Home Assistant, Node-RED and other headless scale integrations, and the openGym bridge.",
+  'read:body-stats': "Read the diary's daily body weight (kg), with when each day last changed. Used by the openGym bridge to keep weigh-ins in step.",
   'mcp:read':        'MCP: read the diary, goals, daily totals, daily steps, body composition, profile (gender, date of birth), and the foods and meals catalog. Also unlocks the equivalent /api/v1 read routes when PUBLIC_API_ENABLED=1.',
   'mcp:write':       'MCP: log food / water / meals / body stats (4 additive tools). Requires MCP_WRITE_ENABLED=1 on the server. Also unlocks the equivalent /api/v1 write routes when PUBLIC_API_WRITE_ENABLED=1.',
   'mcp:destroy':     'MCP: delete or edit diary entries, create catalog foods (3 tools). Requires MCP_DESTROY_ENABLED=1 AND every call to include confirm=true.',
@@ -56,6 +58,10 @@ export const KNOWN_SCOPES = new Set([
   // integrations pushing smart-scale readings straight to the server
   // (BLE → HA → NT), skipping the phone/Health-Connect roundtrip.
   'write:body-measurements',
+  // read:body-stats unlocks GET /api/v1/body-stats — the diary's daily
+  // weight in kg with each day's updated_at, so a sync service can poll
+  // for weigh-ins (the openGym bridge reads NutriTrace's side this way).
+  'read:body-stats',
   // mcp:read unlocks the Model Context Protocol read tools (issue #103)
   // exposed under /api/mcp when MCP_ENABLED=1. Read-only in Phase 1;
   // future mcp:write scope will be added alongside the write tools.

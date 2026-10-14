@@ -16,6 +16,16 @@
  *   - iss === HUB_ISSUER, aud === 'nutritrace', exp in the future, iat at
  *     most 30 s ahead, exp - iat <= 60;
  *   - sub non-empty, scope 'user' or 'sync';
+ *   - every segment is canonical base64url (one string per byte sequence),
+ *     so the same bytes cannot be re-spelled into a second token string.
+ *     That is hygiene, not replay protection: ECDSA signatures are
+ *     malleable ((r, n - s) verifies too), and low-s is not enforced
+ *     because Node and WebCrypto signers do not normalise s;
+ *   - jti is base64url with at least 128 bits and is seen once, which is
+ *     what stops a replay, re-signed twin included: the hub mints a token
+ *     per request (and per retry), so a jti seen again is refused. The
+ *     cache is in memory and keeps an entry until 30 s past its exp (at
+ *     most 120 s), so a clock stepped back by up to 30 s does not reopen it;
  *   - a token that looks like a hub token and fails any check is refused,
  *     it never falls through to another way of signing in;
  *   - the token is never logged.
@@ -32,6 +42,7 @@
  */
 import crypto from 'crypto';
 import db from '../db.js';
+import { logger } from '../logger.js';
 
 export const HUB_AUDIENCE = 'nutritrace';
 // What a scope=sync token may do on /api/v1, and nothing else.
@@ -41,6 +52,38 @@ const MAX_LIFETIME_S = 60;
 const CLOCK_SKEW_S = 30;
 const SEGMENT_RE = /^[A-Za-z0-9_-]*$/;
 const SCOPES = new Set(['user', 'sync']);
+// 22 base64url characters carry 132 bits, the least that holds 128.
+const JTI_RE = /^[A-Za-z0-9_-]{22,128}$/;
+const REPLAY_CACHE_MAX = 100_000;
+
+// Node decodes base64url leniently: the unused low bits of the last
+// character are ignored, so one signature has several spellings. Only the
+// spelling Node itself would produce is accepted.
+const isCanonicalBase64url = segment => Buffer.from(segment, 'base64url').toString('base64url') === segment;
+
+// jti -> when the entry may go (seconds): the token's exp plus the clock
+// skew. Insertion order is close to that order (every token lives at most
+// 60 s), so stale entries are trimmed from the front. Over the cap the
+// oldest entry goes first, which reopens that token for the rest of its
+// life, so it is logged.
+const _seenJti = new Map();
+
+function _replayed(jti, exp, nowS) {
+  for (const [seen, until] of _seenJti) {
+    if (until > nowS) break;
+    _seenJti.delete(seen);
+  }
+  if (_seenJti.has(jti)) return true;
+  if (_seenJti.size >= REPLAY_CACHE_MAX) {
+    _seenJti.delete(_seenJti.keys().next().value);
+    logger.warn(`[auth] hub token replay cache is full (${REPLAY_CACHE_MAX}); dropped its oldest entry`);
+  }
+  _seenJti.set(jti, exp + CLOCK_SKEW_S);
+  return false;
+}
+
+/** How many jti values the replay cache holds (for the tests). */
+export const replayCacheSize = () => _seenJti.size;
 
 /** True when the hub-token path is on (HUB_JWKS set). */
 export function hubMode(env = process.env) {
@@ -136,6 +179,7 @@ export function verifyHubToken(token, config, nowS = Math.floor(Date.now() / 100
   const fail = reason => ({ ok: false, reason });
   const parts = String(token).split('.');
   if (parts.length !== 3 || !parts.every(p => p && SEGMENT_RE.test(p))) return fail('malformed');
+  if (!parts.every(isCanonicalBase64url)) return fail('encoding');
   const header = _json(parts[0]);
   const claims = _json(parts[1]);
   if (!header || !claims) return fail('malformed');
@@ -158,6 +202,9 @@ export function verifyHubToken(token, config, nowS = Math.floor(Date.now() / 100
   if (exp <= iat || exp - iat > MAX_LIFETIME_S) return fail('lifetime');
   if (typeof claims.sub !== 'string' || !claims.sub) return fail('sub');
   if (!SCOPES.has(claims.scope)) return fail('scope');
+  if (typeof claims.jti !== 'string' || !JTI_RE.test(claims.jti)) return fail('jti');
+  // Last, so only a token that passed everything else takes a cache slot.
+  if (_replayed(claims.jti, exp, nowS)) return fail('replay');
   return { ok: true, claims };
 }
 

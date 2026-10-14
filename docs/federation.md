@@ -55,7 +55,17 @@ return `403 Forbidden`. Available scopes:
 |-------------------|----------------------------------------------------------------------------------|
 | `read:foods`      | List + read foods owned by the user. Used by CookTrace (in private development). |
 | `write:workouts`  | Push completed workouts to the user's wellness data via `POST /api/v1/workouts`. Used by LiftTrace so its calorie estimates feed NutriTrace's dynamic-TDEE calculations. |
+| `write:activity`  | Log diary Activity rows via `POST /api/v1/activity`, `POST /api/v1/activity/batch` and `DELETE /api/v1/activity/external/{external_id}`. Used by external trackers and the openGym bridge. |
 | `write:body-measurements` | Push scale readings (weight, body composition) via `POST /api/v1/body-measurements`. Aimed at Home Assistant, Node-RED, Gadgetbridge and other headless integrations that pull data from BLE smart scales the phone can't see. |
+| `read:body-stats` | Read the diary's daily weight via `GET /api/v1/body-stats`. Used by the openGym bridge. |
+
+A hub's `scope=sync` token (see the hub token contract) holds exactly
+`write:activity`, `read:body-stats` and `write:body-measurements`; a
+hub's `scope=user` token never reaches `/api/v1`. Each hub token is
+accepted once: a `jti` seen again before the token expires is a 401.
+The jti is spent when the token is checked, before rate limiting and
+the handler, so a retry after a 429, a 5xx or a timeout must carry a
+newly minted token.
 
 Future scopes (`read:meals`, `read:diary`, etc.) will be added alongside
 the endpoints they unlock; gating tokens on scopes the server can't
@@ -153,10 +163,15 @@ doesn't exist or is not readable by the token's user.
 **Requires scope:** `write:body-measurements`.
 
 Record a scale reading (weight + body composition) for the
-authenticated user. Values land in `diary.body_stats` for the day
-derived from `measured_at` (server local timezone), the same row
-that the manual body-stats UI, the Withings sync, and the diary
-view all read from.
+authenticated user. Values land in `diary.body_stats` for the day in
+`date` (`YYYY-MM-DD`, the user's own day, taken as sent). Without
+`date`, the day `measured_at` falls on in the user's timezone setting,
+else the date written in `measured_at` itself (always so for a time
+with no zone). Never the server's timezone. It is the same row the manual body-stats UI, the Withings
+sync, and the diary view all read from.
+
+A day erased in the app is refused with `409 diary_tombstoned`. Every
+accepted write fires the `body_stat.logged` webhook.
 
 **Semantics.** Overwrites only the fields the payload actually sends.
 Anything already in `body_stats` under other keys stays untouched, so
@@ -165,11 +180,12 @@ same measurement twice → last write wins (fine for idempotency: same
 values, same result).
 
 **Request body** — snake_case or camelCase accepted; snake_case wins
-on collision. Only `measured_at` is required; any subset of the
+on collision. `date` or `measured_at` is required; any subset of the
 measurement fields can be provided.
 
 ```json
 {
+  "date":           "2026-07-25",
   "measured_at":    "2026-07-25T16:10:51Z",
   "source":         "home-assistant",
 
@@ -195,7 +211,7 @@ measurement fields can be provided.
 
 | Wire field       | Unit | Storage key            |
 |------------------|------|------------------------|
-| `weight`         | kg   | `weight_kg`            |
+| `weight`         | kg   | `weight` (tagged `weight_unit: "kg"`, what the Weight card and the adaptive TDEE read) and `weight_kg` |
 | `body_fat`       | %    | `body_fat_pct`         |
 | `muscle_mass`    | kg   | `muscle_mass_kg`       |
 | `bone_mass`      | kg   | `bone_mass_kg`         |
@@ -231,7 +247,7 @@ corrupting the diary.
 {
   "ok":     true,
   "date":   "2026-07-25",
-  "stored": ["weight_kg", "body_fat_pct", "muscle_mass_kg", "bone_mass_kg"]
+  "stored": ["weight", "weight_kg", "body_fat_pct", "muscle_mass_kg", "bone_mass_kg"]
 }
 ```
 
@@ -252,10 +268,82 @@ curl -X POST https://nutritrace.example.com/api/v1/body-measurements \
   }'
 ```
 
-**Reading data back.** `GET /api/v1/body-measurements` is not yet
-implemented — this phase is write-only, matching the "push from
-integration → NT is the source of truth" pattern. Read endpoints
-will be added on demand.
+**Reading data back.** The day's weight reads back through
+`GET /api/v1/body-stats` (below).
+
+### `GET /api/v1/body-stats`
+
+**Requires scope:** `read:body-stats`.
+
+One weight per day: the diary's `body_stats.weight`, in kg (converted
+from its `weight_unit` tag; an untagged legacy value is read in the
+user's `weightUnit` setting, as the app shows it).
+
+| Param           | Type    | Default | Description |
+|-----------------|---------|---------|-------------|
+| `from`, `to`    | date    | open    | `YYYY-MM-DD`, inclusive. No default range. |
+| `updated_since` | instant | —       | ISO 8601 with `Z` or an offset, inclusive. Polling mode (below). |
+| `limit`         | int     | 200     | 1..1000 |
+| `offset`        | int     | 0       | |
+
+```json
+{
+  "items": [ { "date": "2026-10-14", "weight_kg": 78.4, "updated_at": "2026-10-14T06:41:10Z" } ],
+  "total": 41, "limit": 200, "offset": 0
+}
+```
+
+Without `updated_since`, days with no weight are left out and items
+come in date order. With it, every day whose diary row changed at or
+after that instant comes back, oldest change first, with
+`weight_kg: null` when the day has no weight now (a removed weight or
+an erased day), so a poller sees removals. `updated_at` is the diary
+row's last change (any change to the day, so an upper bound for the
+weight), in whole seconds: poll again with the largest `updated_at`
+seen and drop repeats. A full-backup restore brings back the backup's
+rows with their own `updated_at`, so polling cannot see what it
+removed: after a restore, read the whole range again.
+
+### `POST /api/v1/activity`
+
+**Requires scope:** `write:activity`.
+
+One diary Activity row:
+`{ date, name, kcal, duration_min?, distance?, external_id?, source? }`.
+`external_id` (up to 128 characters) names one row per user for good:
+re-posting it updates that row in place (a new `date` moves it), a post
+after a delete brings the same row back, and a second row is never
+made (a unique index backs this). `source: "opengym"` marks the openGym
+bridge's rows: on a day a wearable reports active calories they are
+shown with `covered_by: "<wearable source>"` but not counted toward the
+day's activity total, whatever the user's policy. After the user edits
+or deletes such a row in the app, upserts leave it alone.
+
+Response `201` (created) or `200`:
+`{ ok, status, activity_id, date, kcal, daily_total_kcal, updated }`,
+where `status` is `created`, `updated`, `unchanged` or `user_edited`
+(the row was left as the user made it).
+
+### `POST /api/v1/activity/batch`
+
+**Requires scope:** `write:activity`. Counts as one request.
+
+`{ "items": [ ... ] }`, at most 100 (`400 too_many_items`). Each item
+is an entry as above with `external_id` required, or
+`{ "op": "delete", "external_id": "..." }`. Items run in order, in one
+transaction. Response `200`:
+`{ ok, results: [ { external_id, status, activity_id, code?, error? } ] }`
+with `status` one of `created`, `updated`, `unchanged`, `user_edited`,
+`deleted`, `not_found` or `error` (with the same `code` the single
+route would answer).
+
+### `DELETE /api/v1/activity/external/{external_id}`
+
+**Requires scope:** `write:activity`.
+
+Soft-deletes the row with that key. Idempotent: an unknown or already
+deleted key answers `200 { ok: true, deleted: false, activity_id: null }`.
+Otherwise `200 { ok: true, deleted: true, activity_id, date, daily_total_kcal }`.
 
 ---
 
