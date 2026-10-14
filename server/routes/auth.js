@@ -45,6 +45,7 @@ const _userAttempts = new Map(); // username → { count, resetAt }
 const WINDOW_MS = 15 * 60 * 1000; // 15-min window
 const IP_MAX    = 10;
 const USER_MAX  = 5;
+const _lastSweep = new Map(); // bucket map → when it was last swept
 
 function _bumpBucket(map, key, max) {
   const now = Date.now();
@@ -55,7 +56,10 @@ function _bumpBucket(map, key, max) {
   } else {
     map.set(key, { count: 1, resetAt: now + WINDOW_MS });
   }
-  if (map.size > 1000) {
+  // At most one sweep a minute: with TRUST_PROXY every visitor has its own
+  // key, and sweeping on every new one made each attempt cost the whole map.
+  if (map.size > 1000 && now - (_lastSweep.get(map) ?? 0) > 60_000) {
+    _lastSweep.set(map, now);
     for (const [k, v] of map) { if (now > v.resetAt) map.delete(k); }
   }
   return true;

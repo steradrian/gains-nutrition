@@ -61,6 +61,7 @@ import { APP_VERSION } from './routes/version-source.js';
 // Initialise DB (runs schema)
 import db from './db.js';
 import { isPrivateUploadPath, UPLOAD_RESPONSE_HEADERS } from './lib/upload-paths.js';
+import { applyTrustProxy } from './lib/trust-proxy.js';
 
 // Seed config from env vars if provided (env vars take priority over UI)
 seedSmtpFromEnv();
@@ -74,6 +75,14 @@ const PORT = process.env.PORT || 3001;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 validateRequestLoggingConfig();
+
+try {
+  const trusted = applyTrustProxy(app);
+  if (trusted !== undefined) console.log(`[server] trusting X-Forwarded-For from: ${trusted}`);
+} catch (e) {
+  console.error(`[FATAL] ${e.message}`);
+  process.exit(1);
+}
 
 // ── Reverse-proxy / subpath support ───────────────────────────────────────
 // BASE_URL lets users mount NutriTrace at a path other than root, e.g. for
