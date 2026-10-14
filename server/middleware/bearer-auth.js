@@ -8,6 +8,7 @@
  * See docs/federation.md for the contract.
  */
 import { lookupRawToken } from '../lib/api-tokens.js';
+import { HUB_SYNC_SCOPES } from '../lib/hub-auth.js';
 
 const RATE_LIMIT_PER_MIN = Number(process.env.API_RATE_LIMIT_PER_MIN) || 60;
 const WINDOW_MS = 60 * 1000;
@@ -41,6 +42,22 @@ function _take(tokenId) {
  * with a stable `code` field on errors.
  */
 export function bearerAuth(req, res, next) {
+  // A hub token was verified by authenticate() (middleware/auth.js). Only
+  // the hub's scope=sync reaches the API, with exactly HUB_SYNC_SCOPES; a
+  // browser-originated scope=user token does not.
+  if (req.hub) {
+    if (req.hub.scope !== 'sync') {
+      return res.status(401).json({ error: 'Hub user tokens do not reach /api/v1', code: 'auth_invalid' });
+    }
+    return _admit(req, res, next, {
+      token: {
+        id: `hub:${req.hub.user.id}`, user_id: req.hub.user.id, name: 'hub sync',
+        scopes: [...HUB_SYNC_SCOPES], expires_at: null, last_used_at: null, created_at: null,
+      },
+      user: req.hub.user,
+    });
+  }
+
   const auth = req.get('authorization') || '';
   const m = auth.match(/^Bearer\s+(\S+)\s*$/i);
   if (!m) {
@@ -51,7 +68,10 @@ export function bearerAuth(req, res, next) {
   if (!lookup) {
     return res.status(401).json({ error: 'Invalid token', code: 'auth_invalid' });
   }
+  return _admit(req, res, next, lookup);
+}
 
+function _admit(req, res, next, lookup) {
   // Rate limit
   const bucket = _take(lookup.token.id);
   res.set('X-RateLimit-Limit', String(RATE_LIMIT_PER_MIN));

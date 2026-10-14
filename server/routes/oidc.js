@@ -9,6 +9,7 @@ import { wrap } from '../logger.js';
 import { logger } from '../logger.js';
 import { signToken, sessionMaxAge, requireAuth, userMgmtActive } from '../middleware/auth.js';
 import { claimAnonymousData } from '../lib/claim-anonymous-data.js';
+import { hubMode } from '../lib/hub-auth.js';
 import {
   listProviders, publicProvider, getProvider, getClient,
   generateAuthChecks, persistState, consumeState,
@@ -183,7 +184,8 @@ async function handleCallback(req, res) {
   // First-user bootstrap: claim orphaned data (mirrors password /register).
   // Shares one helper with the password path so the two cannot drift — an
   // OIDC-first instance has exactly the same single-user data to adopt.
-  if (result.created && db.prepare(`SELECT COUNT(*) AS n FROM users`).get().n === 1) {
+  // Never behind a hub, where nobody becomes admin by arriving first.
+  if (!hubMode() && result.created && db.prepare(`SELECT COUNT(*) AS n FROM users`).get().n === 1) {
     claimAnonymousData(result.user.id);
     db.prepare(`UPDATE users SET role = 'admin' WHERE id = ?`).run(result.user.id);
     result.user.role = 'admin';

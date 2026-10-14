@@ -1,0 +1,201 @@
+/**
+ * server/lib/hub-auth.js
+ *
+ * Hub tokens: short-lived ES256 JWS a trusted hub signs for each request it
+ * forwards on a signed-in user's behalf (scope=user) or for its own
+ * background sync (scope=sync). On only when HUB_JWKS is set; unset, nothing
+ * here runs and the server behaves as upstream.
+ *
+ *   HUB_ISSUER  the hub's `iss` (required with HUB_JWKS)
+ *   HUB_JWKS    the hub's public keys, a JWKS JSON string. Never fetched.
+ *
+ * Rules (the hub token contract, v1):
+ *   - header alg is ES256 (pinned, never read to pick a key) and kid is in
+ *     HUB_JWKS; the signature verifies with that key;
+ *   - iss === HUB_ISSUER, aud === 'nutritrace', exp in the future, iat at
+ *     most 30 s ahead, exp - iat <= 60;
+ *   - sub non-empty, scope 'user' or 'sync';
+ *   - a token that looks like a hub token and fails any check is refused,
+ *     it never falls through to another way of signing in;
+ *   - the token is never logged.
+ *
+ * People are mapped by (issuer, sub) in user_hub_links. A first request
+ * creates the account: role 'user', a made-up username, no password. The
+ * role always comes from the users row, never from the token.
+ */
+import crypto from 'crypto';
+import db from '../db.js';
+
+export const HUB_AUDIENCE = 'nutritrace';
+// What a scope=sync token may do on /api/v1, and nothing else.
+export const HUB_SYNC_SCOPES = Object.freeze(['write:activity', 'read:body-stats', 'write:body-measurements']);
+
+const MAX_LIFETIME_S = 60;
+const CLOCK_SKEW_S = 30;
+const SEGMENT_RE = /^[A-Za-z0-9_-]*$/;
+const SCOPES = new Set(['user', 'sync']);
+
+/** True when the hub-token path is on (HUB_JWKS set). */
+export function hubMode(env = process.env) {
+  return String(env.HUB_JWKS || '').trim() !== '';
+}
+
+function parseKeySet(raw) {
+  let jwks;
+  try { jwks = JSON.parse(raw); } catch { throw new Error('HUB_JWKS is not valid JSON'); }
+  const list = Array.isArray(jwks?.keys) ? jwks.keys : [];
+  if (!list.length) throw new Error('HUB_JWKS has no keys');
+  const keys = new Map();
+  for (const jwk of list) {
+    const kid = typeof jwk?.kid === 'string' ? jwk.kid : '';
+    if (!kid) throw new Error('every HUB_JWKS key needs a kid');
+    if (keys.has(kid)) throw new Error(`HUB_JWKS has kid ${kid} twice`);
+    if (jwk.kty !== 'EC' || jwk.crv !== 'P-256') throw new Error(`HUB_JWKS key ${kid} is not an EC P-256 key`);
+    if (jwk.alg != null && jwk.alg !== 'ES256') throw new Error(`HUB_JWKS key ${kid} is not for ES256`);
+    if (jwk.use != null && jwk.use !== 'sig') throw new Error(`HUB_JWKS key ${kid} is not a signing key`);
+    if (jwk.d != null) throw new Error(`HUB_JWKS key ${kid} is a private key; give NutriTrace the public key only`);
+    try {
+      keys.set(kid, crypto.createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y }, format: 'jwk' }));
+    } catch {
+      throw new Error(`HUB_JWKS key ${kid} is not a valid P-256 public key`);
+    }
+  }
+  return keys;
+}
+
+let _cache = null;  // { raw, issuer, config }
+
+/**
+ * { issuer, keys: Map<kid, KeyObject> } from the environment, or null when
+ * the hub is off. Throws on a misconfiguration; the server checks this at
+ * startup and refuses to run.
+ */
+export function hubConfig(env = process.env) {
+  if (!hubMode(env)) return null;
+  const raw = String(env.HUB_JWKS);
+  const issuer = String(env.HUB_ISSUER || '').trim();
+  if (_cache && _cache.raw === raw && _cache.issuer === issuer) return _cache.config;
+  if (!issuer) throw new Error('HUB_ISSUER is required when HUB_JWKS is set');
+  const config = { issuer, keys: parseKeySet(raw) };
+  _cache = { raw, issuer, config };
+  return config;
+}
+
+function _json(segment) {
+  try {
+    const v = JSON.parse(Buffer.from(segment, 'base64url').toString('utf8'));
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+  } catch { return null; }
+}
+
+/**
+ * Does this bearer look like a hub token? Three base64url segments whose
+ * header names a hub kid, or whose payload names the hub as issuer (a token
+ * signed with a retired key is still the hub's, and is refused, not ignored).
+ * Anything else is left to the other ways of signing in.
+ */
+export function looksLikeHubToken(token, config) {
+  const parts = String(token).split('.');
+  if (parts.length !== 3 || !parts[0] || !parts[1] || !parts.every(p => SEGMENT_RE.test(p))) return false;
+  const header = _json(parts[0]);
+  if (!header) return false;
+  if (typeof header.kid === 'string' && config.keys.has(header.kid)) return true;
+  return _json(parts[1])?.iss === config.issuer;
+}
+
+/**
+ * Verify a hub token. { ok: true, claims } or { ok: false, reason }, where
+ * the reason is safe to log (it never contains the token).
+ */
+export function verifyHubToken(token, config, nowS = Math.floor(Date.now() / 1000)) {
+  const fail = reason => ({ ok: false, reason });
+  const parts = String(token).split('.');
+  if (parts.length !== 3 || !parts.every(p => p && SEGMENT_RE.test(p))) return fail('malformed');
+  const header = _json(parts[0]);
+  const claims = _json(parts[1]);
+  if (!header || !claims) return fail('malformed');
+
+  if (header.alg !== 'ES256') return fail('alg');
+  if (header.crit !== undefined) return fail('crit');
+  const key = typeof header.kid === 'string' ? config.keys.get(header.kid) : undefined;
+  if (!key) return fail('kid');
+  const signature = Buffer.from(parts[2], 'base64url');
+  if (signature.length !== 64) return fail('signature');
+  const signed = Buffer.from(`${parts[0]}.${parts[1]}`, 'ascii');
+  if (!crypto.verify('sha256', signed, { key, dsaEncoding: 'ieee-p1363' }, signature)) return fail('signature');
+
+  if (claims.iss !== config.issuer) return fail('iss');
+  if (claims.aud !== HUB_AUDIENCE) return fail('aud');
+  const { iat, exp } = claims;
+  if (!Number.isFinite(iat) || !Number.isFinite(exp)) return fail('times');
+  if (exp <= nowS) return fail('expired');
+  if (iat > nowS + CLOCK_SKEW_S) return fail('iat');
+  if (exp <= iat || exp - iat > MAX_LIFETIME_S) return fail('lifetime');
+  if (typeof claims.sub !== 'string' || !claims.sub) return fail('sub');
+  if (!SCOPES.has(claims.scope)) return fail('scope');
+  return { ok: true, claims };
+}
+
+function _username(issuer, sub) {
+  const base = 'hub-' + crypto.createHash('sha256').update(`${issuer}\0${sub}`).digest('hex').slice(0, 16);
+  let candidate = base;
+  for (let n = 2; db.prepare('SELECT 1 FROM users WHERE username = ?').get(candidate); n++) candidate = `${base}-${n}`;
+  return candidate;
+}
+
+const _findLinked = (issuer, sub) => db.prepare(
+  `SELECT u.id, u.username, u.full_name, u.role
+     FROM user_hub_links l JOIN users u ON u.id = l.user_id
+    WHERE l.issuer = ? AND l.sub = ?`
+).get(issuer, sub);
+
+/**
+ * The NutriTrace account for a hub user, made on first sight.
+ * Returns { id, username, full_name, role } as stored in the database.
+ */
+export const resolveHubUser = db.transaction((issuer, { sub, name }) => {
+  const linked = _findLinked(issuer, sub);
+  if (linked) return linked;
+  const fullName = typeof name === 'string' && name.trim() ? name.trim().slice(0, 100) : null;
+  const r = db.prepare(
+    `INSERT INTO users (username, password_hash, full_name, role) VALUES (?, NULL, ?, 'user')`
+  ).run(_username(issuer, sub), fullName);
+  db.prepare('INSERT INTO user_hub_links (user_id, issuer, sub) VALUES (?, ?, ?)').run(r.lastInsertRowid, issuer, sub);
+  return _findLinked(issuer, sub);
+});
+
+/**
+ * Link an existing account to a hub user (the owner's one-time link, from
+ * scripts/link-hub-user.js). `replace` moves a link the hub user already has
+ * to another account (say, one made automatically before the link).
+ * Returns { previousUserId } (null when the hub user had no link).
+ */
+export const linkHubUser = db.transaction(({ userId, issuer, sub, replace = false }) => {
+  if (!issuer) throw new Error('issuer is required');
+  if (!sub) throw new Error('sub is required');
+  const user = db.prepare('SELECT id FROM users WHERE id = ?').get(userId);
+  if (!user) throw new Error(`no user with id ${userId}`);
+  const current = db.prepare('SELECT user_id FROM user_hub_links WHERE issuer = ? AND sub = ?').get(issuer, sub);
+  if (current?.user_id === userId) return { previousUserId: userId };
+  const other = db.prepare('SELECT sub FROM user_hub_links WHERE user_id = ? AND issuer = ?').get(userId, issuer);
+  if (other) throw new Error(`user ${userId} is already linked to hub user ${other.sub}`);
+  if (current && !replace) throw new Error(`hub user ${sub} is already linked to user ${current.user_id}; pass --replace to move the link`);
+  if (current) db.prepare('DELETE FROM user_hub_links WHERE issuer = ? AND sub = ?').run(issuer, sub);
+  db.prepare('INSERT INTO user_hub_links (user_id, issuer, sub) VALUES (?, ?, ?)').run(userId, issuer, sub);
+  return { previousUserId: current?.user_id ?? null };
+});
+
+/**
+ * The hub's say on a request's bearer token, for middleware/auth.js:
+ *   { kind: 'none' }                  not a hub token (or the hub is off)
+ *   { kind: 'invalid', reason }       a hub token that failed: refuse with 401
+ *   { kind: 'ok', scope, user }       verified; user is the database row
+ */
+export function hubBearer(token) {
+  const config = hubConfig();
+  if (!config || !token || !looksLikeHubToken(token, config)) return { kind: 'none' };
+  const result = verifyHubToken(token, config);
+  if (!result.ok) return { kind: 'invalid', reason: result.reason };
+  const { claims } = result;
+  return { kind: 'ok', scope: claims.scope, user: resolveHubUser(config.issuer, claims) };
+}
