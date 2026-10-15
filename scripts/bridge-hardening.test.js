@@ -12,12 +12,15 @@
  *   - on a hub instance, diary items never pick up an unowned row, whatever
  *     its visibility;
  *   - a restore without hub links keeps a current link only when the
- *     restored account under its id has the same username.
+ *     restored account under its id has the same username;
+ *   - a diary updated_at that holds 'now' (or no time) cannot stop the boot
+ *     or a restore, or fail a later write.
  *
  * The express server is made on first use, so the cases that only need the
  * database run without it.
  */
 import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -249,6 +252,31 @@ test('the hub sync token\'s full batch of 100 costs 100 of its 600 a minute', as
   assert.equal(res.headers.get('x-ratelimit-remaining'), '500');
 });
 
+test('HUB_SYNC_RATE_LIMIT_PER_MIN below one full batch is raised to one, so the hub\'s batches are never 400', async () => {
+  const bearer = await import('../server/middleware/bearer-auth.js');
+  const { BATCH_MAX_ITEMS, hubSyncRateLimit } = bearer;
+  assert.equal(hubSyncRateLimit(undefined), 600);
+  assert.equal(hubSyncRateLimit(''), 600);
+  assert.equal(hubSyncRateLimit('abc'), 600);
+  assert.equal(hubSyncRateLimit('0'), 600);
+  assert.equal(hubSyncRateLimit('-5'), 600);
+  assert.equal(hubSyncRateLimit('10'), BATCH_MAX_ITEMS);
+  assert.equal(hubSyncRateLimit('50'), BATCH_MAX_ITEMS);
+  assert.equal(hubSyncRateLimit(String(BATCH_MAX_ITEMS)), BATCH_MAX_ITEMS);
+  assert.equal(hubSyncRateLimit('250'), 250);
+  assert.equal(hubSyncRateLimit('250.9'), 250);
+
+  // Set for real: the module reads it once, so in a process of its own.
+  const modUrl = new URL('../server/middleware/bearer-auth.js', import.meta.url).href;
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e',
+    `const m = await import(${JSON.stringify(modUrl)}); console.log(JSON.stringify([m.HUB_SYNC_RATE_LIMIT_PER_MIN, m.BATCH_MAX_ITEMS]));`], {
+    env: { ...process.env, DB_PATH: join(dir, 'limit.db'), HUB_SYNC_RATE_LIMIT_PER_MIN: '10' }, encoding: 'utf8',
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /\[100,100\]/);
+  assert.match(run.stderr, /below one full batch; using 100/);
+});
+
 // ── 8. Diary items on a hub instance ──────────────────────────────────────
 test('hub instance: a diary item never picks up an unowned row, even one marked group', () => {
   const reader = newUser(), friend = newUser();
@@ -300,4 +328,120 @@ test('a restore without hub links keeps a link only for the same account (id and
   assert.equal(subFor(admin.id), 'og-restore-admin');
   assert.equal(subFor(swapped.id), null, 'same id, different person: dropped');
   assert.equal(db.prepare(`SELECT username FROM users WHERE id = ?`).get(swapped.id).username, 'someone-else');
+});
+
+// ── 2b. A diary updated_at that is not a time ─────────────────────────────
+// SQLite refuses datetime('now') inside an index, and 'now' stored as text
+// reads as that. The index expression guards against it (lib/diary-changed
+// .js); the boot migration and the restore stamp such rows with a real time.
+const SQL_TIME = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+const diaryTime = (conn, date) => conn.prepare('SELECT updated_at FROM diary WHERE date = ? AND user_id IS NULL').get(date).updated_at;
+
+test('the premise: SQLite refuses a plain datetime(updated_at) index over a stored now', () => {
+  const Database = req('better-sqlite3');
+  const mem = new Database(':memory:');
+  try {
+    mem.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, u TEXT)');
+    mem.exec('CREATE INDEX i ON t(datetime(u))');
+    assert.throws(() => mem.prepare('INSERT INTO t (u) VALUES (?)').run('now'), /non-deterministic use of datetime\(\) in an index/);
+    mem.exec('DROP INDEX i');
+    mem.prepare('INSERT INTO t (u) VALUES (?)').run('now');
+    assert.throws(() => mem.exec('CREATE INDEX i ON t(datetime(u))'), /non-deterministic use of datetime\(\) in an index/);
+  } finally { mem.close(); }
+});
+
+test('a database with a now in diary.updated_at boots, migrates, and takes writes afterwards', () => {
+  const Database = req('better-sqlite3');
+  const file = join(dir, 'legacy.db');
+  const dbUrl = new URL('../server/db.js', import.meta.url).href;
+  const boot = () => execFileSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(dbUrl)})`], {
+    env: { ...process.env, DB_PATH: file }, encoding: 'utf8',
+  });
+  boot(); // schema and index
+
+  // What a database looks like that was written before the index existed.
+  const raw = new Database(file);
+  raw.exec('DROP INDEX idx_diary_user_changed');
+  const put = raw.prepare('INSERT INTO diary (user_id, date, updated_at) VALUES (NULL, ?, ?)');
+  const bad = [['2026-01-01', 'now'], ['2026-01-02', 'NOW'], ['2026-01-03', ''], ['2026-01-04', null], ['2026-01-05', 'garbage'], ['2026-01-06', 'now\u0000']];
+  for (const [date, at] of bad) put.run(date, at);
+  put.run('2026-02-01', '2026-02-01T10:00:00Z');
+  put.run('2026-02-02', '2026-02-02 10:00:00');
+  raw.close();
+
+  const out = boot();
+  assert.match(out, /stamped 6 row\(s\)/);
+  const after = new Database(file);
+  try {
+    for (const [date] of bad) assert.match(diaryTime(after, date), SQL_TIME, date);
+    assert.equal(diaryTime(after, '2026-02-01'), '2026-02-01T10:00:00Z', 'a real time keeps its spelling');
+    assert.equal(diaryTime(after, '2026-02-02'), '2026-02-02 10:00:00');
+    assert.match(after.prepare(`SELECT sql FROM sqlite_master WHERE name = 'idx_diary_user_changed'`).get().sql, /GLOB/);
+
+    // Writes with the index in place, a stored now included.
+    after.prepare(`UPDATE diary SET updated_at = datetime('now') WHERE date = '2026-01-01' AND user_id IS NULL`).run();
+    after.prepare(`INSERT INTO diary (user_id, date, updated_at) VALUES (NULL, '2026-03-01', datetime('now'))`).run();
+    after.prepare(`UPDATE diary SET updated_at = 'now' WHERE date = '2026-03-01' AND user_id IS NULL`).run();
+    after.prepare(`INSERT INTO diary (user_id, date, updated_at) VALUES (NULL, '2026-03-02', 'now')`).run();
+  } finally { after.close(); }
+
+  // Booting again finds nothing to stamp but the two rows written just now.
+  assert.match(boot(), /stamped 2 row\(s\)/);
+  assert.doesNotMatch(boot(), /stamped/);
+});
+
+test('a restore of a backup whose rows carry a now as updated_at succeeds and stamps them', async () => {
+  const admin = newUser('bh-rs-admin', 'admin');
+  const user = newUser('bh-rs-user');
+  db.prepare('INSERT INTO user_hub_links (user_id, issuer, sub) VALUES (?, ?, ?)').run(admin.id, ISSUER, 'og-rs-admin');
+  const admTok = () => hubToken('og-rs-admin', { scope: 'user' });
+  const put = db.prepare(`INSERT INTO diary (user_id, date, body_stats, updated_at) VALUES (?, ?, '{}', ?)`);
+  put.run(user.id, '2026-04-01', '2026-04-01 08:00:00');
+  put.run(user.id, '2026-04-02', '2026-04-02 08:00:00');
+  put.run(user.id, '2026-04-03', '2026-04-03 08:00:00');
+  put.run(user.id, '2026-04-04', '2026-04-04 08:00:00');
+  db.prepare(`INSERT INTO foods (user_id, name) VALUES (?, 'Restore Oats')`).run(user.id);
+  db.prepare(`INSERT INTO user_settings (user_id, key, value) VALUES (?, 'weightUnit', '"kg"')`).run(user.id);
+
+  const backup = await call('/api/full-backup', { method: 'POST', token: admTok() });
+  assert.equal(backup.status, 200);
+  const AdmZip = req('adm-zip');
+  const backups = join(dir, 'uploads', 'backups');
+  const zip = new AdmZip(join(backups, backup.body.filename));
+  const data = JSON.parse(zip.readAsText('database.json'));
+  const badAt = { '2026-04-01': 'now', '2026-04-02': 'NOW', '2026-04-03': 'now\u0000', '2026-04-04': '2026-04-04T08:00:00Z' };
+  data.diary = data.diary.map(d => (d.user_id === user.id && badAt[d.date] ? { ...d, updated_at: badAt[d.date] } : d));
+  data.foods = data.foods.map(f => (f.name === 'Restore Oats' ? { ...f, updated_at: 'now' } : f));
+  data.user_settings = data.user_settings.map(s => (s.user_id === user.id ? { ...s, updated_at: 'now' } : s));
+  zip.updateFile('database.json', Buffer.from(JSON.stringify(data)));
+  zip.writeZip(join(backups, 'nutritrace-backup-now.zip'));
+
+  const restored = await call('/api/full-backup/nutritrace-backup-now.zip/restore', { method: 'POST', token: admTok() });
+  assert.equal(restored.status, 200, JSON.stringify(restored.body));
+  const at = date => db.prepare('SELECT updated_at FROM diary WHERE user_id = ? AND date = ?').get(user.id, date).updated_at;
+  for (const date of ['2026-04-01', '2026-04-02', '2026-04-03']) assert.match(at(date), SQL_TIME, date);
+  assert.equal(at('2026-04-04'), '2026-04-04T08:00:00Z', 'a real time is restored as it was');
+  assert.match(db.prepare(`SELECT updated_at FROM foods WHERE name = 'Restore Oats'`).get().updated_at, SQL_TIME);
+  assert.match(db.prepare(`SELECT updated_at FROM user_settings WHERE user_id = ? AND key = 'weightUnit'`).get(user.id).updated_at, SQL_TIME);
+
+  const poll = await call('/api/v1/body-stats?updated_since=2026-04-01T00:00:00Z', { token: pat(user) });
+  assert.equal(poll.status, 200);
+  assert.equal(poll.body.total, 4);
+});
+
+test('writes to diary rows keep working with the index in place, whatever updated_at holds', async () => {
+  const user = newUser();
+  assert.match(db.prepare(`SELECT sql FROM sqlite_master WHERE name = 'idx_diary_user_changed'`).get().sql, /GLOB/);
+  const upsert = db.prepare(`INSERT INTO diary (user_id, date, items, updated_at) VALUES (?, ?, '[]', datetime('now'))
+    ON CONFLICT(date, user_id) DO UPDATE SET items = excluded.items, updated_at = excluded.updated_at`);
+  upsert.run(user.id, '2026-05-01');
+  upsert.run(user.id, '2026-05-01');
+  db.prepare(`UPDATE diary SET updated_at = datetime('now') WHERE user_id = ?`).run(user.id);
+  // A literal now written behind the app's back is stored without an error,
+  // and the poll answers without it.
+  db.prepare(`INSERT INTO diary (user_id, date, updated_at) VALUES (?, '2026-05-02', 'now')`).run(user.id);
+  db.prepare(`UPDATE diary SET updated_at = 'now' WHERE user_id = ? AND date = '2026-05-01'`).run(user.id);
+  const poll = await call('/api/v1/body-stats?updated_since=2020-01-01T00:00:00Z', { token: pat(user) });
+  assert.equal(poll.status, 200);
+  assert.equal(poll.body.total, 0, 'a row that holds no time is not in the poll until the next boot stamps it');
 });

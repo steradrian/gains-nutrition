@@ -47,6 +47,7 @@ import { wrap } from '../../../logger.js';
 import { requireScope } from '../../../middleware/bearer-auth.js';
 import { isCalendarDate, safeJson } from '../../../lib/mcp/_util.js';
 import { bodyStatsWeightKg, untaggedWeightUnit } from '../../../lib/body-weight.js';
+import { DIARY_CHANGED_SQL } from '../../../lib/diary-changed.js';
 
 const router = Router();
 
@@ -113,7 +114,7 @@ router.get('/', requireScope('read:body-stats'), wrap((req, res) => {
   if (from != null) { where.push('date >= ?'); params.push(from); }
   if (to != null) { where.push('date <= ?'); params.push(to); }
   const untaggedUnit = untaggedWeightUnit(owner);
-  const columns = `date, body_stats, deleted_at, datetime(updated_at) AS changed,
+  const columns = `date, body_stats, deleted_at, ${DIARY_CHANGED_SQL} AS changed,
             strftime('%Y-%m-%dT%H:%M:%SZ', updated_at) AS updated_at`;
   const toItem = row => ({
     date: row.date,
@@ -132,16 +133,16 @@ router.get('/', requireScope('read:body-stats'), wrap((req, res) => {
   }
 
   // Polling: the keyset condition and the LIMIT run in SQL on
-  // idx_diary_user_changed (user_id, datetime(updated_at), date), so a poll
+  // idx_diary_user_changed (user_id, DIARY_CHANGED_SQL, date), so a poll
   // reads one page, not the user's whole diary. The plain lower bound lets
   // SQLite start the index range at the cursor; the row value is the exact
   // position. total (what is left from here) is counted over the same range.
-  where.push('datetime(updated_at) >= ?', '(datetime(updated_at), date) > (?, ?)');
+  where.push(`${DIARY_CHANGED_SQL} >= ?`, `(${DIARY_CHANGED_SQL}, date) > (?, ?)`);
   params.push(position.u, position.u, position.d);
   const total = db.prepare(`SELECT COUNT(*) AS n FROM diary WHERE ${where.join(' AND ')}`).get(...params).n;
   const page = db.prepare(
     `SELECT ${columns} FROM diary WHERE ${where.join(' AND ')}
-      ORDER BY datetime(updated_at) ASC, date ASC LIMIT ?`
+      ORDER BY ${DIARY_CHANGED_SQL} ASC, date ASC LIMIT ?`
   ).all(...params, limit).map(toItem);
   const items = page.map(({ changed, ...item }) => item);
 

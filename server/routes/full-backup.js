@@ -10,6 +10,7 @@ import { logger } from '../logger.js';
 import { seedSmtpFromEnv } from '../email.js';
 import { seedAiFromEnv } from '../ai.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import { restorableUpdatedAt } from '../lib/diary-changed.js';
 
 const router = express.Router();
 router.use(requireAuth);
@@ -228,7 +229,10 @@ function restoreFromZip(zip) {
       INSERT OR IGNORE INTO foods (id, user_id, name, brand, nutrition, portion, unit, img_url, notes, category, barcode, visibility, source_id, favorite, usage_count, last_used_at, nutrition_basis, alt_units, density_g_ml, source_app, source_external_id, source_url, created_at, updated_at, deleted_at)
       VALUES (@id, @user_id, @name, @brand, @nutrition, @portion, @unit, @img_url, @notes, @category, @barcode, @visibility, @source_id, @favorite, @usage_count, @last_used_at, @nutrition_basis, @alt_units, @density_g_ml, @source_app, @source_external_id, @source_url, @created_at, COALESCE(@updated_at, datetime('now')), @deleted_at)
     `);
-    for (const f of data.foods || []) insFood.run({ visibility: 'private', source_id: null, favorite: 0, usage_count: 0, last_used_at: null, nutrition_basis: null, alt_units: null, density_g_ml: null, source_app: null, source_external_id: null, source_url: null, updated_at: null, deleted_at: null, ...f });
+    // A backup's updated_at that is not a time (a literal 'now', '') is
+    // restored as the restore's own time, like a missing one: 'now' stored
+    // as text makes SQLite throw inside idx_diary_user_changed.
+    for (const f of data.foods || []) insFood.run({ visibility: 'private', source_id: null, favorite: 0, usage_count: 0, last_used_at: null, nutrition_basis: null, alt_units: null, density_g_ml: null, source_app: null, source_external_id: null, source_url: null, deleted_at: null, ...f, updated_at: restorableUpdatedAt(f.updated_at) });
 
     // Federation source columns (source_app / source_external_id / source_url /
     // import_warnings, added for the CookTrace pull flow) are part of the
@@ -241,7 +245,7 @@ function restoreFromZip(zip) {
     for (const m of data.meals || []) insMeal.run({
       visibility: 'private', source_id: null, favorite: 0, usage_count: 0, last_used_at: null,
       source_app: null, source_external_id: null, source_url: null, import_warnings: null,
-      updated_at: null, deleted_at: null, servings: null, ...m,
+      deleted_at: null, servings: null, ...m, updated_at: restorableUpdatedAt(m.updated_at),
     });
 
     const insFoodShare = db.prepare(`INSERT OR IGNORE INTO food_shares (food_id, user_id) VALUES (@food_id, @user_id)`);
@@ -261,13 +265,13 @@ function restoreFromZip(zip) {
     `);
     for (const d of data.diary || []) insDiary.run({
       notes: null, completed_at: null, completed_meals: null,
-      updated_at: null, deleted_at: null, ...d,
+      deleted_at: null, ...d, updated_at: restorableUpdatedAt(d.updated_at),
     });
 
     const insSettings = db.prepare(`
       INSERT OR IGNORE INTO user_settings (user_id, key, value, updated_at, deleted_at) VALUES (@user_id, @key, @value, COALESCE(@updated_at, datetime('now')), @deleted_at)
     `);
-    for (const s of data.user_settings || []) insSettings.run({ updated_at: null, deleted_at: null, ...s });
+    for (const s of data.user_settings || []) insSettings.run({ deleted_at: null, ...s, updated_at: restorableUpdatedAt(s.updated_at) });
 
     const insConfig = db.prepare(`
       INSERT OR REPLACE INTO app_config (key, value) VALUES (@key, @value)
