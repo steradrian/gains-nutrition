@@ -7,9 +7,10 @@
  * rest of its batch lands, and the answer names it in `quarantined_diary`.
  *
  * Every writer: the Android push, the wellness weight mirror it triggers, the
- * JSON import, the CSV import, the backup restore, and the day routes
- * (PUT /api/diary/:date and its two completion routes, pinned for the 400 in
- * contract-diary.test.js).
+ * JSON import, the CSV import and the backup restore quarantine; the day
+ * routes (PUT /api/diary/:date and its two completion routes) answer 400 and
+ * keep nothing, since their caller can correct the date and retry. The cap on
+ * the quarantine is in diary-quarantine-cap.test.js.
  */
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -98,7 +99,7 @@ test('JSON import: days under a date that does not exist are quarantined and nam
   ];
   const r = await srv.api('POST', '/api/data/import', { diary });
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.deepEqual(r.body, { ok: true, quarantined_diary: [...BAD, '42'].map(date => ({ date })) });
+  assert.deepEqual(r.body, { ok: true, quarantined_diary: [...BAD, '42'].map(date => ({ date })), quarantine_full: [] });
   assert.equal(dates().length, before + 2);
   assert.ok(dates().includes('2026-09-01') && dates().includes('2026-09-02'));
   const kept = quarantine('data-import');
@@ -108,7 +109,7 @@ test('JSON import: days under a date that does not exist are quarantined and nam
 
 test('JSON import: a clean file names nothing', async () => {
   const r = await srv.api('POST', '/api/data/import', { diary: [{ date: '2026-09-03', items: [] }] });
-  assert.deepEqual(r.body, { ok: true, quarantined_diary: [] });
+  assert.deepEqual(r.body, { ok: true, quarantined_diary: [], quarantine_full: [] });
 });
 
 test('CSV import: a day that exists in no month is not read as a date, so it never becomes a diary day', async () => {
@@ -134,7 +135,8 @@ test('CSV import: a day that exists in no month is not read as a date, so it nev
   assert.equal(dates().includes('2026-04-31'), false);
 });
 
-test('day routes: 400 bad_date, nothing written, and what was sent is kept', async () => {
+test('day routes: 400 bad_date and nothing written anywhere, the caller can correct and retry', async () => {
+  const held = db.prepare('SELECT COUNT(*) AS n FROM diary_quarantine').get().n;
   const put = await srv.api('PUT', '/api/diary/2026-02-30', { items: [item('put-1')], body_stats: { weight: 80 }, water: [], notes: 'kept' });
   assert.deepEqual([put.status, put.body], [400, { error: 'invalid date', code: 'bad_date' }]);
   const done = await srv.api('PUT', '/api/diary/2026-02-30/completion', { completed: true });
@@ -142,12 +144,12 @@ test('day routes: 400 bad_date, nothing written, and what was sent is kept', asy
   assert.deepEqual([done.status, meal.status], [400, 400]);
   assert.equal(dates().includes('2026-02-30') || dates().includes('garbage'), false);
 
-  const [kept] = quarantine('diary-put');
-  assert.deepEqual([kept.user_id, kept.date], [owner, '2026-02-30']);
-  assert.equal(kept.payload.notes, 'kept');
-  assert.equal(kept.payload.items[0].uuid, 'put-1');
-  assert.deepEqual(quarantine('diary-completion').map(k => [k.date, k.payload]), [['2026-02-30', { completed: true }]]);
-  assert.deepEqual(quarantine('diary-meal-completion').map(k => [k.date, k.payload]), [['garbage', { slot: 1, completed: true }]]);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM diary_quarantine').get().n, held, 'an interactive write is refused, not quarantined');
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM diary_tombstones WHERE date IN ('2026-02-30', 'garbage')`).get().n, 0);
+
+  const fixed = await srv.api('PUT', '/api/diary/2026-02-28', { items: [item('put-2')], body_stats: {}, water: [], notes: '' });
+  assert.equal(fixed.status, 200, JSON.stringify(fixed.body));
+  assert.ok(dates().includes('2026-02-28'), 'the corrected date saves');
 });
 
 test('backup restore: days under a date that does not exist go to the quarantine, the rest of the backup is restored', async () => {
@@ -166,7 +168,7 @@ test('backup restore: days under a date that does not exist go to the quarantine
   const held = db.prepare('SELECT COUNT(*) AS n FROM diary_quarantine').get().n;
   const restored = await srv.api('POST', `/api/full-backup/${made.body.filename}/restore`);
   assert.equal(restored.status, 200, JSON.stringify(restored.body));
-  assert.deepEqual(restored.body, { ok: true, quarantined_diary: [{ date: '2026-02-30' }, { date: 'garbage' }, { date: '2026-04-31' }] });
+  assert.deepEqual(restored.body, { ok: true, quarantined_diary: [{ date: '2026-02-30' }, { date: 'garbage' }, { date: '2026-04-31' }], quarantine_full: [] });
   assert.ok(dates().includes('2026-08-01'), 'a real day in the same backup is restored');
   assert.ok(['2026-02-30', 'garbage', '2026-04-31'].every(d => !dates().includes(d)));
   const kept = quarantine('full-backup-restore');

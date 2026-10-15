@@ -1,10 +1,12 @@
 /**
  * A diary day is keyed by a real calendar date. A day that arrives under any
- * other ("2026-02-30", "garbage") is never written to `diary` and never lost:
- * it goes to `diary_quarantine` whole, and the rest of its batch carries on.
+ * other ("2026-02-30", "garbage") is never written to `diary`. From an
+ * interactive route it is refused with 400 bad_date and nothing is kept. From
+ * a batch writer it is never lost: it goes to `diary_quarantine` whole, and
+ * the rest of its batch carries on (up to QUARANTINE_MAX_PER_USER rows).
  *
  * Two layers, so no writer can get one past:
- *   admitDiaryDay        what every writer calls before it inserts a day.
+ *   admitDiaryDay        what every batch writer calls before it inserts a day.
  *   ensureDiaryDateGuard a trigger on `diary` itself, for a writer added later
  *                        that forgets to call it: the insert fails loudly
  *                        instead of poisoning the search index.
@@ -34,14 +36,42 @@ export function quarantineDay(db, { userId, date, payload, source }) {
 }
 
 /**
- * true: the day's date is real, write it. false: it was quarantined, skip it.
+ * Most rows one person's quarantine takes from batch writers. A batch carries
+ * a handful of bad days when something upstream went wrong once; 500 is the
+ * history of a bad export many times over (a year and a half of daily days)
+ * and, as every row holds a whole day, keeps the table's size bounded.
+ * Past it a batch writer skips the day (ADMIT.FULL) instead of growing it
+ * further. The boot migration is not a batch writer: it calls quarantineDay
+ * directly, because it deletes the row it copies.
+ */
+export const QUARANTINE_MAX_PER_USER = 500;
+
+/** What admitDiaryDay decided about a day. */
+export const ADMIT = { WRITE: 'write', QUARANTINED: 'quarantined', FULL: 'full' };
+
+/**
+ * For the batch writers (Android push, wellness mirror, JSON and CSV import,
+ * backup restore): a batch must not silently lose a day.
+ *   ADMIT.WRITE        the date is real, write the day.
+ *   ADMIT.QUARANTINED  it is not; kept whole in diary_quarantine, skip it.
+ *   ADMIT.FULL         it is not, and this person's quarantine is at
+ *                      QUARANTINE_MAX_PER_USER; skip it, nothing is kept.
+ *                      The caller reports it as `quarantine_full`.
  * Inside the caller's transaction, if there is one, so a rolled-back batch
  * does not leave a quarantine row behind.
+ *
+ * The interactive routes do not come through here: they answer 400 bad_date
+ * and write nothing anywhere, since the caller can fix the date and retry.
  */
 export function admitDiaryDay(db, { userId, date, payload, source }) {
-  if (isCalendarDate(date)) return true;
+  if (isCalendarDate(date)) return ADMIT.WRITE;
+  const held = db.prepare('SELECT COUNT(*) AS n FROM diary_quarantine WHERE user_id IS ?').get(userId ?? null).n;
+  if (held >= QUARANTINE_MAX_PER_USER) {
+    console.warn(`[diary-quarantine] user ${userId ?? 'none'} holds ${held} quarantined day(s), the limit; skipped a day from ${source}`);
+    return ADMIT.FULL;
+  }
   quarantineDay(db, { userId, date, payload, source });
-  return false;
+  return ADMIT.QUARANTINED;
 }
 
 /**

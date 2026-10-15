@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { INDEX_DATE_VALID } from '../server/lib/diary-keyset.js';
 import {
-  admitDiaryDay, ensureDiaryDateGuard, quarantineBadDiaryRows, quarantineDay, quarantinedDate,
+  ADMIT, QUARANTINE_MAX_PER_USER, admitDiaryDay, ensureDiaryDateGuard, quarantineBadDiaryRows, quarantineDay, quarantinedDate,
 } from '../server/lib/diary-quarantine.js';
 import { isCalendarDate } from '../server/lib/mcp/_util.js';
 
@@ -115,10 +115,10 @@ test('admitDiaryDay lets a real date through and quarantines anything else with 
       id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, date TEXT NOT NULL, payload TEXT NOT NULL, source TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
     const circular = {}; circular.self = circular;
-    assert.equal(admitDiaryDay(db, { userId: 1, date: '2026-10-14', payload: {}, source: 's' }), true);
-    assert.equal(admitDiaryDay(db, { userId: 1, date: '2026-02-30', payload: { items: [1, 2] }, source: 'one' }), false);
-    assert.equal(admitDiaryDay(db, { userId: null, date: 42, payload: { n: 1 }, source: 'two' }), false);
-    assert.equal(admitDiaryDay(db, { userId: undefined, date: null, payload: circular, source: 'three' }), false);
+    assert.equal(admitDiaryDay(db, { userId: 1, date: '2026-10-14', payload: {}, source: 's' }), ADMIT.WRITE);
+    assert.equal(admitDiaryDay(db, { userId: 1, date: '2026-02-30', payload: { items: [1, 2] }, source: 'one' }), ADMIT.QUARANTINED);
+    assert.equal(admitDiaryDay(db, { userId: null, date: 42, payload: { n: 1 }, source: 'two' }), ADMIT.QUARANTINED);
+    assert.equal(admitDiaryDay(db, { userId: undefined, date: null, payload: circular, source: 'three' }), ADMIT.QUARANTINED);
     const rows = db.prepare('SELECT user_id, date, payload, source FROM diary_quarantine ORDER BY id').all();
     assert.deepEqual(rows.map(r => [r.user_id, r.date, r.source]), [[1, '2026-02-30', 'one'], [null, '42', 'two'], [null, 'null', 'three']]);
     assert.deepEqual(JSON.parse(rows[0].payload), { items: [1, 2] });
@@ -127,6 +127,67 @@ test('admitDiaryDay lets a real date through and quarantines anything else with 
     assert.equal(db.prepare('SELECT length(date) AS n FROM diary_quarantine ORDER BY id DESC LIMIT 1').get().n, 500, 'the raw date is kept whole');
     assert.equal(quarantinedDate('x'.repeat(500)).length, 40, 'what an answer names is short');
     assert.equal(quarantinedDate(42), '42');
+  } finally { db.close(); }
+});
+
+test('admitDiaryDay stops quarantining at the cap, per person, and says so; a real date is never affected', () => {
+  const db = new Database(':memory:');
+  const warn = console.warn;
+  const warned = [];
+  console.warn = (...a) => { warned.push(a.join(' ')); };
+  try {
+    db.exec(`CREATE TABLE diary_quarantine (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, date TEXT NOT NULL, payload TEXT NOT NULL, source TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
+    const fill = userId => {
+      const ins = db.prepare(`INSERT INTO diary_quarantine (user_id, date, payload, source) VALUES (?, 'garbage', '{}', 'fill')`);
+      for (let i = 0; i < QUARANTINE_MAX_PER_USER - 1; i++) ins.run(userId);
+    };
+    const count = userId => db.prepare('SELECT COUNT(*) AS n FROM diary_quarantine WHERE user_id IS ?').get(userId).n;
+    const bad = userId => admitDiaryDay(db, { userId, date: '2026-02-30', payload: { n: 1 }, source: 'batch' });
+    fill(1);
+    fill(null);
+
+    assert.equal(bad(1), ADMIT.QUARANTINED, 'the last place is still taken');
+    assert.equal(count(1), QUARANTINE_MAX_PER_USER);
+    assert.equal(bad(1), ADMIT.FULL, 'the next is refused');
+    assert.equal(bad(1), ADMIT.FULL);
+    assert.equal(count(1), QUARANTINE_MAX_PER_USER, 'and nothing was added');
+    assert.equal(warned.length, 2);
+    assert.match(warned[0], new RegExp(`user 1 holds ${QUARANTINE_MAX_PER_USER}\\b`), 'the warning names the person and the count');
+
+    assert.equal(admitDiaryDay(db, { userId: 1, date: '2026-10-14', payload: {}, source: 's' }), ADMIT.WRITE, 'a real day is written however full it is');
+    assert.equal(count(2), 0);
+    assert.equal(bad(2), ADMIT.QUARANTINED, 'another person has a quarantine of their own');
+    assert.equal(bad(null), ADMIT.QUARANTINED, 'so does single-user mode (user_id NULL)');
+    assert.equal(bad(null), ADMIT.FULL);
+    assert.equal(count(null), QUARANTINE_MAX_PER_USER);
+  } finally { console.warn = warn; db.close(); }
+});
+
+test('the migration ignores the cap: it never deletes a row without its copy', () => {
+  const db = new Database(':memory:');
+  try {
+    const extra = 5;
+    db.exec(`
+      CREATE TABLE diary (id INTEGER PRIMARY KEY, user_id INTEGER, date TEXT NOT NULL);
+      CREATE TABLE diary_quarantine (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, date TEXT NOT NULL, payload TEXT NOT NULL, source TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+    const quarantine = db.prepare(`INSERT INTO diary_quarantine (user_id, date, payload, source) VALUES (3, 'garbage', '{}', 'fill')`);
+    for (let i = 0; i < QUARANTINE_MAX_PER_USER; i++) quarantine.run();
+    const diary = db.prepare(`INSERT INTO diary (user_id, date) VALUES (3, ?)`);
+    for (let i = 0; i < extra; i++) diary.run(`bad-${i}`);
+
+    assert.equal(quarantineBadDiaryRows(db), extra);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM diary').get().n, 0);
+    assert.deepEqual(
+      db.prepare(`SELECT date FROM diary_quarantine WHERE source = 'migration' ORDER BY id`).all().map(r => r.date),
+      Array.from({ length: extra }, (_, i) => `bad-${i}`),
+      'every row was copied, past the cap',
+    );
   } finally { db.close(); }
 });
 

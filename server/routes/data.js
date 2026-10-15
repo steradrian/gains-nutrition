@@ -3,7 +3,7 @@ import db from '../db.js';
 import { wrap } from '../logger.js';
 import { requireAuth, userMgmtActive } from '../middleware/auth.js';
 import { ensureUuids } from '../lib/diary-merge.js';
-import { admitDiaryDay, quarantinedDate } from '../lib/diary-quarantine.js';
+import { ADMIT, admitDiaryDay, quarantinedDate } from '../lib/diary-quarantine.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -86,8 +86,10 @@ router.post('/import', wrap((req, res) => {
   );
 
   // Days whose date is not a real YYYY-MM-DD are kept in diary_quarantine,
-  // not imported, and named in the answer.
+  // not imported, and named in the answer; once that is full they are named
+  // in `quarantine_full` and kept nowhere.
   const quarantined = [];
+  const quarantineFull = [];
   const run = db.transaction(() => {
     for (const f of foodList) {
       insFood.run(
@@ -126,8 +128,9 @@ router.post('/import', wrap((req, res) => {
     }
     for (const e of diary) {
       if (e.date == null) continue;
-      if (!admitDiaryDay(db, { userId: u, date: e.date, payload: e, source: 'data-import' })) {
-        quarantined.push({ date: quarantinedDate(e.date) });
+      const admitted = admitDiaryDay(db, { userId: u, date: e.date, payload: e, source: 'data-import' });
+      if (admitted !== ADMIT.WRITE) {
+        (admitted === ADMIT.FULL ? quarantineFull : quarantined).push({ date: quarantinedDate(e.date) });
         continue;
       }
       insDiary.run(
@@ -163,7 +166,7 @@ router.post('/import', wrap((req, res) => {
   });
 
   run();
-  res.json({ ok: true, quarantined_diary: quarantined });
+  res.json({ ok: true, quarantined_diary: quarantined, quarantine_full: quarantineFull });
 }));
 
 export default router;

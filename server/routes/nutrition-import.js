@@ -21,7 +21,7 @@ import { parseCronometer }  from '../lib/nutrition-import/cronometer.js';
 import { parseLoseit }      from '../lib/nutrition-import/loseit.js';
 import { parseMfp, pickMealCsv } from '../lib/nutrition-import/mfp.js';
 import { ensureUuids } from '../lib/diary-merge.js';
-import { admitDiaryDay, quarantinedDate } from '../lib/diary-quarantine.js';
+import { ADMIT, admitDiaryDay, quarantinedDate } from '../lib/diary-quarantine.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -224,13 +224,16 @@ router.post('/commit', upload.single('file'), wrap((req, res) => {
 
   let imported = 0, skipped = 0, replaced = 0, merged = 0;
   const errors = [];
-  // Days under a date that does not exist: kept in diary_quarantine, not imported.
+  // Days under a date that does not exist: kept in diary_quarantine, not
+  // imported; once that is full, named in `quarantine_full` and kept nowhere.
   const quarantined = [];
+  const quarantineFull = [];
 
   const tx = db.transaction(() => {
     for (const [date, items] of byDate.entries()) {
-      if (!admitDiaryDay(db, { userId, date, payload: { date, items }, source: 'nutrition-import' })) {
-        quarantined.push({ date: quarantinedDate(date) });
+      const admitted = admitDiaryDay(db, { userId, date, payload: { date, items }, source: 'nutrition-import' });
+      if (admitted !== ADMIT.WRITE) {
+        (admitted === ADMIT.FULL ? quarantineFull : quarantined).push({ date: quarantinedDate(date) });
         continue;
       }
       const existing = userId == null
@@ -289,7 +292,7 @@ router.post('/commit', upload.single('file'), wrap((req, res) => {
   }
 
   logger.info(`[nutrition-import] user=${userId} source=${source} mode=${dupeMode} imported=${imported} skipped=${skipped} replaced=${replaced} merged=${merged}`);
-  res.json({ imported, skipped, replaced, merged, errors, quarantined_diary: quarantined, totalItems: canonical.length });
+  res.json({ imported, skipped, replaced, merged, errors, quarantined_diary: quarantined, quarantine_full: quarantineFull, totalItems: canonical.length });
 }));
 
 export default router;

@@ -47,7 +47,7 @@
  *   one statement.
  */
 import db from '../db.js';
-import { admitDiaryDay } from './diary-quarantine.js';
+import { ADMIT, admitDiaryDay } from './diary-quarantine.js';
 
 const FLAG_KEY = 'mirrorWellnessWeight';
 
@@ -87,10 +87,10 @@ export function mirrorWeightToBodyStats(userId, date, weightKg) {
 
     // A reading under a date that does not exist would create a diary day
     // there. It is kept in diary_quarantine instead (the wellness row itself
-    // is the caller's, and already saved).
-    if (!admitDiaryDay(db, { userId, date, payload: { date, weight_kg: kg }, source: 'wellness-mirror' })) {
-      return { skipped: true, reason: 'invalid-date', quarantined: true };
-    }
+    // is the caller's, and already saved), unless that is full.
+    const admitted = admitDiaryDay(db, { userId, date, payload: { date, weight_kg: kg }, source: 'wellness-mirror' });
+    if (admitted === ADMIT.QUARANTINED) return { skipped: true, reason: 'invalid-date', quarantined: true };
+    if (admitted === ADMIT.FULL) return { skipped: true, reason: 'invalid-date', quarantineFull: true };
 
     const existing = userId == null
       ? db.prepare(`SELECT body_stats FROM diary WHERE date = ? AND user_id IS NULL AND deleted_at IS NULL`).get(date)

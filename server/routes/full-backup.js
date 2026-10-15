@@ -11,7 +11,7 @@ import { seedSmtpFromEnv } from '../email.js';
 import { seedAiFromEnv } from '../ai.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { restorableUpdatedAt } from '../lib/diary-changed.js';
-import { admitDiaryDay, quarantinedDate } from '../lib/diary-quarantine.js';
+import { ADMIT, admitDiaryDay, quarantinedDate } from '../lib/diary-quarantine.js';
 
 const router = express.Router();
 router.use(requireAuth);
@@ -190,10 +190,13 @@ const upload = multer({
   limits: { fileSize: _backupMaxMb * 1024 * 1024 },
 });
 
-// Returns the diary days kept in diary_quarantine instead of restored.
+// Returns the diary days kept in diary_quarantine instead of restored, and
+// those that could not be kept either because it is full:
+// { quarantined_diary, quarantine_full }, the fields of the answer.
 function restoreFromZip(zip) {
   const data = JSON.parse(zip.readAsText('database.json'));
   const quarantined = [];
+  const quarantineFull = [];
 
   db.transaction(() => {
     // Read before DELETE FROM users cascades them away; see the hub links below.
@@ -281,8 +284,9 @@ function restoreFromZip(zip) {
     // A day under a date that does not exist (a backup made before the
     // diary refused them) is restored into diary_quarantine, not the diary.
     for (const d of data.diary || []) {
-      if (!admitDiaryDay(db, { userId: d.user_id, date: d.date, payload: d, source: 'full-backup-restore' })) {
-        quarantined.push({ date: quarantinedDate(d.date) });
+      const admitted = admitDiaryDay(db, { userId: d.user_id, date: d.date, payload: d, source: 'full-backup-restore' });
+      if (admitted !== ADMIT.WRITE) {
+        (admitted === ADMIT.FULL ? quarantineFull : quarantined).push({ date: quarantinedDate(d.date) });
         continue;
       }
       insDiary.run({
@@ -474,7 +478,7 @@ function restoreFromZip(zip) {
   // regardless of what was in the backup (the backup may predate the lock flags).
   seedSmtpFromEnv();
   seedAiFromEnv();
-  return quarantined;
+  return { quarantined_diary: quarantined, quarantine_full: quarantineFull };
 }
 
 function dumpDatabase() {
@@ -611,7 +615,7 @@ router.post('/:name/restore', requireAdmin, (req, res) => {
   const filePath = path.join(BACKUPS_DIR, filename);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Not found' });
   try {
-    res.json({ ok: true, quarantined_diary: restoreFromZip(new AdmZip(filePath)) });
+    res.json({ ok: true, ...restoreFromZip(new AdmZip(filePath)) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -621,7 +625,7 @@ router.post('/:name/restore', requireAdmin, (req, res) => {
 router.post('/upload-restore', requireAdmin, upload.single('backup'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   try {
-    res.json({ ok: true, quarantined_diary: restoreFromZip(new AdmZip(req.file.path)) });
+    res.json({ ok: true, ...restoreFromZip(new AdmZip(req.file.path)) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   } finally {

@@ -4,7 +4,7 @@ import { wrap } from '../logger.js';
 import { requireAuth, userMgmtActive } from '../middleware/auth.js';
 import { freshenItemImages, hydrateItems } from '../lib/diary-helpers.js';
 import { INDEX_MAX_BYTES, diaryIndexEntry } from '../lib/diary-index.js';
-import { admitDiaryDay } from '../lib/diary-quarantine.js';
+import { isCalendarDate } from '../lib/mcp/_util.js';
 import { INDEX_DATE_VALID, decodeCursor, encodeCursor, readKeysetPage } from '../lib/diary-keyset.js';
 import { mergeEntries } from '../lib/diary-merge.js';
 import { dispatchWebhookEvent } from '../lib/webhooks.js';
@@ -20,12 +20,14 @@ router.use(requireAuth);
 const uid = req => userMgmtActive() ? req.user.id : null;
 
 // A day that does not exist (2026-02-30, "not-a-date") is never written: the
-// search index and the hub's filter can only carry real dates. What was sent
-// is kept in diary_quarantine and the answer is 400 bad_date.
-function _admitDate(req, res, date, source) {
-  if (admitDiaryDay(db, { userId: uid(req), date, payload: req.body, source })) return true;
+// search index and the hub's filter can only carry real dates. These routes
+// are interactive, so the answer is 400 bad_date and nothing is kept anywhere:
+// the caller fixes the date and sends again. Only the batch writers quarantine
+// (lib/diary-quarantine.js), because a batch has no one to ask.
+function _rejectBadDate(res, date) {
+  if (isCalendarDate(date)) return false;
   res.status(400).json({ error: 'invalid date', code: 'bad_date' });
-  return false;
+  return true;
 }
 
 // ── Tombstone helpers ─────────────────────────────────────────────────────
@@ -156,7 +158,7 @@ function _stripDataUrlImages(items) {
 // The whole write runs inside a single db.transaction so a crash mid-merge
 // leaves the row untouched.
 router.put('/:date', wrap((req, res) => {
-  if (!_admitDate(req, res, req.params.date, 'diary-put')) return;
+  if (_rejectBadDate(res, req.params.date)) return;
   const receivedAt = Date.now();
   const { body_stats, water, notes } = req.body;
   const items = _stripDataUrlImages(req.body.items);
@@ -324,7 +326,7 @@ router.put('/:date/completion', wrap((req, res) => {
   const receivedAt = Date.now();
   const u = uid(req);
   const date = String(req.params.date || '');
-  if (!_admitDate(req, res, date, 'diary-completion')) return;
+  if (_rejectBadDate(res, date)) return;
   const completed = req.body?.completed !== false;
 
   const existing = u == null
@@ -377,7 +379,7 @@ router.put('/:date/completion', wrap((req, res) => {
 router.put('/:date/meal-completion', wrap((req, res) => {
   const u = uid(req);
   const date = String(req.params.date || '');
-  if (!_admitDate(req, res, date, 'diary-meal-completion')) return;
+  if (_rejectBadDate(res, date)) return;
   const slot = Number(req.body?.slot);
   if (!Number.isInteger(slot) || slot < 0 || slot > 31) {
     return res.status(400).json({ error: 'slot must be an integer in [0, 31]' });
