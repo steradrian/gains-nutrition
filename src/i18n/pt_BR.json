@@ -365,6 +365,10 @@
       "delete_selected": "Apagar Selecionados",
       "mark_day_complete": "Marque o Dia como Completo",
       "unmark_day_complete": "Desmarque o Dia como Completo"
+    },
+    "activity": {
+      "covered_by": "coberto por {device}",
+      "covered_by_hint": "Seu dispositivo vestível já conta as calorias deste treino hoje, então esta entrada é exibida, mas não é contada."
     }
   }
 }

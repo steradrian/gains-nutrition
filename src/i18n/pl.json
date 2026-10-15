@@ -47,5 +47,11 @@
     "draft_restored": "Przywrócono niezapisane wcześniej zmiany.",
     "draft_discard": "Odrzuć",
     "card_categories": "Kategorie"
+  },
+  "diary": {
+    "activity": {
+      "covered_by": "uwzględnione przez {device}",
+      "covered_by_hint": "Twoje urządzenie już liczy kalorie z tego treningu dzisiaj, więc ten wpis jest pokazany, ale nie jest liczony."
+    }
   }
 }

@@ -748,6 +748,8 @@
       "estimated_short": "ca.",
       "wellness_hint": "Synkroniserte treningsøkter fra enheten din vises i Velvære",
       "not_counted": "Telles ikke — bruker bærbar enhet",
+      "covered_by": "dekket av {device}",
+      "covered_by_hint": "Den bærbare enheten din teller allerede kaloriene fra denne treningsøkten i dag, så oppføringen vises, men telles ikke.",
       "policy_chip": "Regel: bærbar enhet har prioritet. Endre dette i Innstillinger → Dagbok.",
       "save_as_template": "Lagre som mal",
       "save_as_template_hint": "(festet øverst neste gang du velger)",

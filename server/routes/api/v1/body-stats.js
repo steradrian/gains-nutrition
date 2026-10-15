@@ -46,10 +46,11 @@ import db from '../../../db.js';
 import { wrap } from '../../../logger.js';
 import { requireScope } from '../../../middleware/bearer-auth.js';
 import { isCalendarDate, safeJson } from '../../../lib/mcp/_util.js';
+import { bodyStatsWeightKg, untaggedWeightUnit } from '../../../lib/body-weight.js';
+import { DIARY_CHANGED_SQL } from '../../../lib/diary-changed.js';
 
 const router = Router();
 
-const LB_PER_KG = 2.2046226218;
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 1000;
 const INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
@@ -69,22 +70,10 @@ function _decodeCursor(raw) {
   return { u: pos.u, d: pos.d };
 }
 
-function _weightUnitSetting(owner) {
-  if (owner == null) return null;
-  const row = db.prepare(
-    `SELECT value FROM user_settings WHERE user_id = ? AND key = 'weightUnit' AND deleted_at IS NULL`
-  ).get(owner);
-  const value = row?.value == null ? null : safeJson(row.value, row.value);
-  return value === 'kg' || value === 'lb' ? value : null;
-}
-
+// lib/body-weight.js reads the weight; an API answer keeps 2 decimals.
 function _weightKg(bodyStats, untaggedUnit) {
-  const raw = bodyStats?.weight;
-  if (raw == null || raw === '') return null;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  const unit = bodyStats.weight_unit || untaggedUnit;
-  return Math.round((unit === 'lb' ? n / LB_PER_KG : n) * 100) / 100;
+  const kg = bodyStatsWeightKg(bodyStats, untaggedUnit);
+  return kg == null ? null : Math.round(kg * 100) / 100;
 }
 
 router.get('/', requireScope('read:body-stats'), wrap((req, res) => {
@@ -124,28 +113,38 @@ router.get('/', requireScope('read:body-stats'), wrap((req, res) => {
   const params = owner == null ? [] : [owner];
   if (from != null) { where.push('date >= ?'); params.push(from); }
   if (to != null) { where.push('date <= ?'); params.push(to); }
-  if (position) {
-    where.push('(datetime(updated_at) > ? OR (datetime(updated_at) = ? AND date > ?))');
-    params.push(position.u, position.u, position.d);
-  }
-  const order = position ? 'datetime(updated_at) ASC, date ASC' : 'date ASC';
+  const untaggedUnit = untaggedWeightUnit(owner);
+  const columns = `date, body_stats, deleted_at, ${DIARY_CHANGED_SQL} AS changed,
+            strftime('%Y-%m-%dT%H:%M:%SZ', updated_at) AS updated_at`;
+  const toItem = row => ({
+    date: row.date,
+    weight_kg: row.deleted_at == null ? _weightKg(safeJson(row.body_stats, {}), untaggedUnit) : null,
+    updated_at: row.updated_at,
+    changed: row.changed,
+  });
 
-  const rows = db.prepare(
-    `SELECT date, body_stats, deleted_at, datetime(updated_at) AS changed,
-            strftime('%Y-%m-%dT%H:%M:%SZ', updated_at) AS updated_at
-       FROM diary WHERE ${where.join(' AND ')} ORDER BY ${order}`
-  ).all(...params);
-
-  const untaggedUnit = _weightUnitSetting(owner) ?? 'lb';
-  const all = [];
-  for (const row of rows) {
-    const weightKg = row.deleted_at == null ? _weightKg(safeJson(row.body_stats, {}), untaggedUnit) : null;
-    if (weightKg == null && !position) continue;
-    all.push({ date: row.date, weight_kg: weightKg, updated_at: row.updated_at, changed: row.changed });
+  if (!position) {
+    // Listing: which days have a weight is decided in JS (the JSON may be
+    // loose), so this reads the range; polling below does not.
+    const rows = db.prepare(`SELECT ${columns} FROM diary WHERE ${where.join(' AND ')} ORDER BY date ASC`).all(...params);
+    const all = rows.map(toItem).filter(item => item.weight_kg != null);
+    const items = all.slice(offset, offset + limit).map(({ changed, ...item }) => item);
+    return res.json({ items, total: all.length, limit, offset });
   }
-  const page = all.slice(offset, offset + limit);
+
+  // Polling: the keyset condition and the LIMIT run in SQL on
+  // idx_diary_user_changed (user_id, DIARY_CHANGED_SQL, date), so a poll
+  // reads one page, not the user's whole diary. The plain lower bound lets
+  // SQLite start the index range at the cursor; the row value is the exact
+  // position. total (what is left from here) is counted over the same range.
+  where.push(`${DIARY_CHANGED_SQL} >= ?`, `(${DIARY_CHANGED_SQL}, date) > (?, ?)`);
+  params.push(position.u, position.u, position.d);
+  const total = db.prepare(`SELECT COUNT(*) AS n FROM diary WHERE ${where.join(' AND ')}`).get(...params).n;
+  const page = db.prepare(
+    `SELECT ${columns} FROM diary WHERE ${where.join(' AND ')}
+      ORDER BY ${DIARY_CHANGED_SQL} ASC, date ASC LIMIT ?`
+  ).all(...params, limit).map(toItem);
   const items = page.map(({ changed, ...item }) => item);
-  if (!position) return res.json({ items, total: all.length, limit, offset });
 
   // Move past the rows returned, but never into the current second (or
   // later): a write can still land there, under a date before the cursor.
@@ -157,8 +156,8 @@ router.get('/', requireScope('read:body-stats'), wrap((req, res) => {
   }
   // has_more only when the cursor moved: calling again within this second
   // would answer the same rows.
-  const hasMore = all.length > page.length && next !== position;
-  res.json({ items, total: all.length, limit, next_cursor: _encodeCursor(next), has_more: hasMore });
+  const hasMore = total > page.length && next !== position;
+  res.json({ items, total, limit, next_cursor: _encodeCursor(next), has_more: hasMore });
 }));
 
 export default router;

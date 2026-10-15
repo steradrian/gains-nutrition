@@ -21,6 +21,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Webhook deliveries connect to the address that was checked** (no second DNS lookup a rebinding server could answer differently).
 - **More IPv6 forms of private addresses are refused**: IPv4-compatible (`::7f00:1`), local-use NAT64 (`64:ff9b:1::/48`), 6to4 (`2002::/16`, by the IPv4 address inside) and site-local (`fec0::/10`).
 - **Hub requests leave an audit trail** at `LOG_LEVEL=debug`: the token's `jti`, a hash of its `sub` and its `act`, never the token itself.
+- **A full hub-token replay cache refuses new tokens (503, `Retry-After`)** instead of forgetting its oldest entry, which let a flood of tokens reopen a spent one.
+- **Activity integrations count one request per batch item** against their rate limit; a batch of 100 was one request.
+- **On a hub instance, diary items no longer pick up details from unowned rows marked `group`.**
+- **Restoring a backup without hub links keeps a link only for the same account** (same id and username), so another instance's backup can't hand a hub user someone else's account.
 
 ### Added
 
@@ -34,6 +38,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Scale readings sent to `POST /api/v1/body-measurements` now show on the diary's Weight card and feed the adaptive calorie goal.** The weight was stored under a key nothing read. The day is the `date` sent (or the reading's day in your timezone), no longer the server's timezone, and the `body_stat.logged` webhook fires.
 - **Editing an integration's activity entry in the app no longer cuts it loose.** The entry kept its id in its source, which the edit reset, so the next sync made a second entry.
 - **Workouts no longer count twice in Adaptive and Dynamic modes.** With "Adjust goal from activity" on, the day's activity was added on top of a target that already includes training. It now adds only to a fixed target (including Adaptive's first weeks and a Dynamic day without wearable data).
+- **Old weights without a unit read the same everywhere.** A weight saved before units were recorded is read in your weight unit (as the diary shows it) by the adaptive calorie goal (in the Android app's standalone mode too) and the weekly email, which read it as kg: a 200 lb history counted as 200 kg.
+- **`POST /api/v1/activity` checks its fields.** `kcal` must be a number (`null`, `true` or an object no longer count as 0 or 1), `name` a string, and a new `external_id` over 128 characters is refused rather than cut (two long ids could become one). Leaving `source` out of an update keeps the entry's source.
+- **The diary shows openGym workouts a wearable covers as not counted**, with the wearable's name, under every activity policy, and the Activity header's total leaves them out.
+- **`GET /api/v1/body-stats` polling reads one page at a time** through a new index, not the whole diary. A diary day whose `updated_at` holds no real time (a literal `now`, empty, free text) is stamped with the current time at startup and when restoring a backup, so it cannot stop the server from starting or fail later writes.
+- **`HUB_SYNC_RATE_LIMIT_PER_MIN` below 100 is raised to 100.** Activity batches cost one unit per item, so a lower limit refused every full batch of 100 with a `400` the hub kept retrying.
 
 ---
 

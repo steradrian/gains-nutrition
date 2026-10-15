@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
 import db from './db.js';
 import { logger } from './logger.js';
+import { bodyStatsWeightKg, untaggedWeightUnit } from './lib/body-weight.js';
 
 /** Seed app_config from env vars at startup (env vars take priority) */
 export function seedSmtpFromEnv() {
@@ -496,16 +497,14 @@ export async function sendWeeklySummaryEmail(userId, origin) {
     ).all(userId, fromStr, toStr);
     // Also check diary body stats for weight
     let firstWeight = null, lastWeight = null;
+    // In kg, as the email shows it; an untagged legacy weight in the user's
+    // weightUnit, as the diary shows it (lib/body-weight.js, the same rule
+    // as lib/adaptive-tdee.js and /api/v1/body-stats).
+    const untaggedUnit = untaggedWeightUnit(userId);
     for (const row of diaryRows) {
-      try {
-        // Same columns as above; a weight logged in lb counts in kg, as the
-        // email shows kg (and as lib/adaptive-tdee.js reads it).
-        const bs = JSON.parse(row.body_stats || '{}');
-        const raw = Number(bs?.weight);
-        if (bs?.weight == null || bs.weight === '' || !Number.isFinite(raw) || raw <= 0) continue;
-        const w = bs.weight_unit === 'lb' ? raw / 2.20462 : raw;
-        if (firstWeight == null) firstWeight = w; lastWeight = w;
-      } catch {}
+      const w = bodyStatsWeightKg(row.body_stats || '{}', untaggedUnit);
+      if (w == null) continue;
+      if (firstWeight == null) firstWeight = w; lastWeight = w;
     }
     if (weightRows.length >= 2) {
       firstWeight = weightRows[0].value;

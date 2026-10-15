@@ -14,7 +14,25 @@ const RATE_LIMIT_PER_MIN = Number(process.env.API_RATE_LIMIT_PER_MIN) || 60;
 // The hub's background sync backfills history in bursts (one request per
 // activity or measurement), so it gets its own bucket per user and a higher
 // ceiling than a hand-made API token.
-export const HUB_SYNC_RATE_LIMIT_PER_MIN = Number(process.env.HUB_SYNC_RATE_LIMIT_PER_MIN) || 600;
+//
+// The most items POST /api/v1/activity/batch takes. Each item costs one unit
+// of the limit, so a limit below this makes a full batch impossible: a
+// personal token's 400 batch_over_rate_limit is something its owner can fix
+// by sending smaller batches, but the hub's retry queue cannot split a
+// batch and would keep retrying it until it gave up. The hub's limit is
+// therefore never below one full batch.
+export const BATCH_MAX_ITEMS = 100;
+
+/** The hub sync limit for a configured value: unset or invalid is 600, and never below BATCH_MAX_ITEMS. */
+export function hubSyncRateLimit(configured) {
+  const n = Number(configured);
+  return Math.max(Number.isFinite(n) && n > 0 ? Math.floor(n) : 600, BATCH_MAX_ITEMS);
+}
+
+export const HUB_SYNC_RATE_LIMIT_PER_MIN = hubSyncRateLimit(process.env.HUB_SYNC_RATE_LIMIT_PER_MIN);
+if (Number(process.env.HUB_SYNC_RATE_LIMIT_PER_MIN) > 0 && Number(process.env.HUB_SYNC_RATE_LIMIT_PER_MIN) < BATCH_MAX_ITEMS) {
+  console.warn(`[bearer-auth] HUB_SYNC_RATE_LIMIT_PER_MIN=${process.env.HUB_SYNC_RATE_LIMIT_PER_MIN} is below one full batch; using ${BATCH_MAX_ITEMS}`);
+}
 const WINDOW_MS = 60 * 1000;
 
 // Per-token sliding-window counters. Cleared lazily on access.
@@ -75,20 +93,56 @@ export function bearerAuth(req, res, next) {
   return _admit(req, res, next, lookup, RATE_LIMIT_PER_MIN);
 }
 
+function _limited(res, bucket) {
+  const retry = Math.ceil((bucket.resetAt - Date.now()) / 1000);
+  res.set('Retry-After', String(retry));
+  return res.status(429).json({ error: 'Rate limited', code: 'rate_limited' });
+}
+
 function _admit(req, res, next, lookup, limit) {
   const bucket = _take(lookup.token.id, limit);
   res.set('X-RateLimit-Limit', String(limit));
   res.set('X-RateLimit-Remaining', String(bucket.remaining));
   res.set('X-RateLimit-Reset', String(Math.floor(bucket.resetAt / 1000)));
-  if (bucket.over) {
-    const retry = Math.ceil((bucket.resetAt - Date.now()) / 1000);
-    res.set('Retry-After', String(retry));
-    return res.status(429).json({ error: 'Rate limited', code: 'rate_limited' });
-  }
+  if (bucket.over) return _limited(res, bucket);
 
   req.apiToken = lookup.token;
   req.apiUser = lookup.user;
+  req.rateLimit = { key: lookup.token.id, limit };
   next();
+}
+
+/**
+ * Make a request cost `cost` units of its token's rate limit in all, the
+ * one bearerAuth already took included: a batch costs one per item, so a
+ * batch of 100 is not one request's worth of writes. All or nothing: when
+ * the rest does not fit in what is left this window, nothing more is spent
+ * and the request gets 429 with Retry-After. A cost above the whole limit
+ * can never fit and gets 400 batch_over_rate_limit. Returns true when the
+ * handler may go on; false when it must return without writing.
+ */
+export function chargeRateLimit(req, res, cost) {
+  const extra = cost - 1;
+  if (!req.rateLimit || extra <= 0) return true;
+  const { key, limit } = req.rateLimit;
+  if (cost > limit) {
+    res.status(400).json({ error: `this token may make ${limit} writes a minute; send at most ${limit} items per batch`, code: 'batch_over_rate_limit' });
+    return false;
+  }
+  const now = Date.now();
+  let b = _buckets.get(key);
+  if (!b || now >= b.resetAt) {
+    // The window turned over since bearerAuth counted the request.
+    b = { count: 0, resetAt: now + WINDOW_MS };
+    _buckets.set(key, b);
+  }
+  if (b.count + extra > limit) {
+    _limited(res, b);
+    return false;
+  }
+  b.count += extra;
+  res.set('X-RateLimit-Remaining', String(Math.max(0, limit - b.count)));
+  return true;
 }
 
 /**

@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { randomUUID } from 'crypto';
 import { foldText } from './lib/search-text.js';
+import { DIARY_CHANGED_SQL } from './lib/diary-changed.js';
 
 const dbPath = process.env.DB_PATH || './nutritrace.db';
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -725,6 +726,17 @@ for (const t of ['foods', 'meals', 'activity_log', 'fasts']) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_${t}_client_key ON ${t}(user_id, client_key)`);
 }
 
+// A diary updated_at that is not a time ('now' written as a literal, NULL,
+// '', free text) would be skipped by the Android pull and the body-stats
+// poll, and a literal 'now' is what SQLite refuses inside the datetime()
+// index below. Rewrite those rows to the current time before anything
+// reads them, notes_updated_at below included. Idempotent: nothing matches
+// once they are real times.
+{
+  const fixed = db.prepare(`UPDATE diary SET updated_at = datetime('now') WHERE ${DIARY_CHANGED_SQL} IS NULL`).run().changes;
+  if (fixed) console.log(`[db] diary updated_at: stamped ${fixed} row(s) that did not hold a time`);
+}
+
 // ── When a day's note was last edited ─────────────────────────────────────
 // The sync push lets the newer note win (routes/sync.js). It sets this
 // itself; every other writer (the diary routes, imports, MCP, the API) is
@@ -952,6 +964,13 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_meals_deleted ON meals(deleted_at);
   CREATE INDEX IF NOT EXISTS idx_diary_deleted ON diary(deleted_at);
 `);
+
+// GET /api/v1/body-stats polling: one user's diary rows after a keyset
+// position on (updated_at, date), oldest first. The route compares
+// datetime(updated_at), which reads any stored spelling of the time the
+// same way, so the index holds that expression rather than the column.
+// DIARY_CHANGED_SQL cannot throw on a bad stored value (lib/diary-changed.js).
+db.exec(`CREATE INDEX IF NOT EXISTS idx_diary_user_changed ON diary(user_id, ${DIARY_CHANGED_SQL}, date)`);
 
 // ── OIDC providers: split auto_register into auto_link_verified_email +
 //    auto_register_new_users (rc.12). Existing rows keep their old behavior

@@ -752,6 +752,8 @@
       "estimated_short": "ca.",
       "wellness_hint": "Synchronisierte Trainings von deinem Gerät findest du unter Gesundheit",
       "not_counted": "Nicht gewertet – Daten vom Wearable verwendet",
+      "covered_by": "abgedeckt durch {device}",
+      "covered_by_hint": "Dein Wearable zählt die Kalorien dieses Trainings heute bereits, daher wird dieser Eintrag angezeigt, aber nicht gewertet.",
       "policy_chip": "Regel: Wearable hat Vorrang. Anpassbar unter Einstellungen → Tagebuch.",
       "save_as_template": "Als Vorlage speichern",
       "save_as_template_hint": "(beim nächsten Mal in der Auswahl angeheftet)",

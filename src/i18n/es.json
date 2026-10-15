@@ -782,6 +782,8 @@
       "estimated_short": "est.",
       "wellness_hint": "Los entrenamientos sincronizados desde tu dispositivo están en Bienestar",
       "not_counted": "no se cuenta: se usa el dato del wearable",
+      "covered_by": "cubierto por {device}",
+      "covered_by_hint": "Tu wearable ya cuenta las calorías de este entrenamiento hoy, así que esta entrada se muestra pero no se cuenta.",
       "policy_chip": "Regla: gana el wearable. Se cambia en Ajustes → Diario.",
       "save_as_template": "Guardar como plantilla",
       "save_as_template_hint": "(queda fijada en el selector la próxima vez)",

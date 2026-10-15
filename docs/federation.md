@@ -65,7 +65,11 @@ hub's `scope=user` token never reaches `/api/v1`. Each hub token is
 accepted once: a `jti` seen again before the token expires is a 401.
 The jti is spent when the token is checked, before rate limiting and
 the handler, so a retry after a 429, a 5xx or a timeout must carry a
-newly minted token.
+newly minted token. The record of spent jtis is in memory (a restart
+forgets it, acceptable with 60 s tokens) and holds up to 100,000
+unexpired ones; when it is full, new hub tokens get
+`503 { "code": "hub_replay_cache_full" }` with `Retry-After` until
+entries expire, rather than an old jti being forgotten.
 
 Future scopes (`read:meals`, `read:diary`, etc.) will be added alongside
 the endpoints they unlock; gating tokens on scopes the server can't
@@ -73,9 +77,13 @@ actually serve is confusing UI.
 
 ### Rate limiting
 
-60 requests / minute per token by default. Configurable via
-`API_RATE_LIMIT_PER_MIN` env var. Limit headers returned on every
-response:
+60 requests / minute per token by default (a batch counts one per
+item). Configurable via `API_RATE_LIMIT_PER_MIN` env var; a hub's sync
+token has its own, `HUB_SYNC_RATE_LIMIT_PER_MIN` (600). The hub's limit
+is never below 100, one full batch: a lower setting is raised to 100 (and
+logged at boot), because a limit under the batch size would answer every
+full batch with `400 batch_over_rate_limit`, which the hub cannot split
+and retries until it gives up. Limit headers returned on every response:
 
 ```
 X-RateLimit-Limit:     60
@@ -330,8 +338,15 @@ cannot see what it removed: after a restore, read the whole range again.
 
 One diary Activity row:
 `{ date, name, kcal, duration_min?, distance?, external_id?, source? }`.
-`external_id` (a longer one is cut to 128 characters, as it always
-was) names one row per user for good: re-posting it updates that row in
+`name` is a string; `kcal` and `duration_min` are numbers (a string that
+spells a number is accepted too); anything else (`null`, `true`, an
+object) is `400 bad_name` / `bad_kcal` / `bad_duration`. `source` left
+out on an update keeps the row's own (an openGym row stays one).
+`external_id` is at most 128 characters: a longer one is accepted only
+when its first 128 characters already name a row (rows from before this
+rule, when longer keys were cut), and is otherwise
+`400 external_id_too_long`, since two long keys could cut to one.
+It names one row per user for good: re-posting it updates that row in
 place (a new `date` moves it), a post after a delete brings the same
 row back, and a second row is never made (a unique index backs this).
 `source: "opengym"` marks the openGym bridge's rows: on a day a wearable
@@ -355,7 +370,12 @@ where `status` is `created`, `updated`, `unchanged` or `user_edited`
 
 ### `POST /api/v1/activity/batch`
 
-**Requires scope:** `write:activity`. Counts as one request.
+**Requires scope:** `write:activity`. Counts as one request per item
+against the token's rate limit: a batch that does not fit in what is left
+of the minute is refused whole (`429`, `Retry-After`, nothing written),
+and one larger than the whole limit (over 60 items for a personal token
+at the default) is `400 batch_over_rate_limit`. The hub's sync token
+(600 a minute) takes full batches.
 
 `{ "items": [ ... ] }`, at most 100 (`400 too_many_items`). Each item
 is an entry as above with `external_id` required, or

@@ -507,6 +507,8 @@
       "estimated_short": "est.",
       "wellness_hint": "Les entraînements synchronisés depuis votre appareil se trouvent dans Bien-être",
       "not_counted": "non compté — utilisation d'un appareil connecté",
+      "covered_by": "couvert par {device}",
+      "covered_by_hint": "Votre appareil connecté compte déjà les calories de cet entraînement aujourd'hui ; cette entrée est affichée mais non comptée.",
       "policy_chip": "Politique : l'appareil connecté prime. À modifier dans Paramètres → Journal.",
       "actions": {
         "edit": "Modifier",
