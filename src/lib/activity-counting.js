@@ -31,3 +31,18 @@ export function activityTotals(rows, ctx) {
   }
   return { counted, uncounted };
 }
+
+/**
+ * The Activity header: the kcal of the rows that count, and the rows that
+ * total is made of (the bar's segments). When no row counts (a wearable
+ * wins the day) the header still shows what was logged, flagged
+ * `noneCounted`, as it always did, so it never reads as zero.
+ */
+export function activityHeader(rows, ctx) {
+  const all = rows || [];
+  const { counted, uncounted } = activityTotals(all, ctx);
+  const noneCounted = all.length > 0 && all.every(row => !activityCounts(row, ctx));
+  return noneCounted
+    ? { kcal: uncounted, rows: all, noneCounted }
+    : { kcal: counted, rows: all.filter(row => activityCounts(row, ctx)), noneCounted };
+}

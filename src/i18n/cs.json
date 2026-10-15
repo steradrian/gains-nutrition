@@ -10,5 +10,11 @@
     "sign_out": "Odhlásit",
     "experimental": "Experimentální",
     "hide": "Skrýt"
+  },
+  "diary": {
+    "activity": {
+      "covered_by": "zahrnuto zařízením {device}",
+      "covered_by_hint": "Vaše nositelné zařízení už dnes započítává kalorie tohoto tréninku, takže se tento záznam zobrazuje, ale nepočítá se."
+    }
   }
 }

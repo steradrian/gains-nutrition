@@ -115,5 +115,11 @@
       "accent_color": "强调色",
       "navigation_style": "导航样式"
     }
+  },
+  "diary": {
+    "activity": {
+      "covered_by": "已由 {device} 记录",
+      "covered_by_hint": "你的穿戴设备今天已计入这次训练的卡路里，因此此条目仅显示，不计入。"
+    }
   }
 }

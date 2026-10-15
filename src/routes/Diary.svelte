@@ -66,7 +66,7 @@
   import { portal } from '../lib/portal.js';
   import { Nutrition, NUTRIMENTS } from '../lib/nutrition.js';
   import { readBodyStat, tagBodyStats, LENGTH_KEYS } from '../lib/body-stats-unit.js';
-  import { activityCounts, deviceLabel } from '../lib/activity-counting.js';
+  import { activityHeader, deviceLabel } from '../lib/activity-counting.js';
   import { decimalInput, parseDecimal } from '../lib/decimal-input.js';
   import { pageScrollTop } from '../lib/scroll-anchor.js';
   import { focusDefaultField } from '../lib/default-field.js';
@@ -2414,8 +2414,9 @@
       {@const policy = $manualActivityPolicy || 'wearable_wins'}
       {@const wearablePresent = (sum.wearable || 0) > 0}
       {@const countCtx = { wearablePresent, policy }}
-      {@const noneCounted = acts.length > 0 && acts.every(a => !activityCounts(a, countCtx))}
-      {@const totalActKcal = acts.reduce((s, a) => s + (a.kcal || 0), 0)}
+      {@const header = activityHeader(acts, countCtx)}
+      {@const noneCounted = header.noneCounted}
+      {@const totalActKcal = header.kcal}
       <section class="meal-group card activity-group" id="activity-group" in:fly={{ y: 18, duration: _isInitialMount && !$disableAnimations ? 280 : 0, delay: _isInitialMount && !$disableAnimations ? 60 + meals.length * 55 : 0 }}>
         <div class="meal-header" style="--meal-color:#4FFFB0">
           <span class="meal-type-icon material-symbols-rounded">directions_run</span>
@@ -2459,7 +2460,7 @@
           {@const _totActEnergy = Nutrition.displayEnergy(totalActKcal, $energyUnit)}
           <div class="meal-macro-footer activity-footer" aria-label={$_('diary.activity.section')}>
             <div class="meal-macro-bar">
-              {#each acts as a (a.id)}
+              {#each header.rows as a (a.id)}
                 {@const _aE = Nutrition.displayEnergy(a.kcal || 0, $energyUnit)}
                 <div class="amb-seg" style="width:{totalActKcal ? (a.kcal / totalActKcal * 100) : 0}%" title={`${a.name} — ${_aE.value} ${_aE.unit}`}></div>
               {/each}
