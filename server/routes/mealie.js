@@ -4,7 +4,7 @@ import { requireAuth, userMgmtActive } from '../middleware/auth.js';
 import db from '../db.js';
 import { fetchChecked, serviceBase, readBody } from '../lib/ssrf-guard.js';
 import { apiPathFor, MEALIE_API } from '../lib/service-paths.js';
-import { homeServiceAllowed, SERVICE_OPT_IN } from '../lib/outbound-policy.js';
+import { addressErrorForClient, homeServiceAllowed, SERVICE_OPT_IN } from '../lib/outbound-policy.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -82,8 +82,8 @@ router.post('/proxy', wrap(async (req, res) => {
     res.json(JSON.parse((await readBody(response, 5 * 1024 * 1024)).toString('utf8')));
   } catch(e) {
     clearTimeout(timer);
-    const refused = /addresses are (not allowed|blocked)/.test(e?.message || '');
-    res.status(503).json({ error: refused ? e.message : 'Could not reach Mealie' });
+    const generic = 'Could not reach Mealie';
+    res.status(503).json({ error: addressErrorForClient(req, e, generic, 'mealie') ?? generic });
   }
 }));
 

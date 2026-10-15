@@ -127,7 +127,10 @@ test('a restore that rewrites the stored list is read straight away', () => {
 test('only a signed-in admin is remembered, never the zero-account window', () => {
   // A hub request (authVia 'hub') arrives on the hub's internal address for
   // this server, never the one people open, so it is not remembered either.
-  assert.match(read('../server/index.js'), /\n  if \(req\.user\?\.role === 'admin' && req\.authVia !== 'hub'\) rememberAdminOrigin\(req\);\n/);
+  // The token's role only spares the lookup for everyone else: the decision
+  // is the database's (hasAdminRole), as a demoted admin's token still says
+  // admin.
+  assert.match(read('../server/index.js'), /\n  if \(req\.user\?\.role === 'admin' && req\.authVia !== 'hub' && hasAdminRole\(req\)\) rememberAdminOrigin\(req\);\n/);
 });
 
 test('an invite with no known address is refused, not sent with a broken link', () => {

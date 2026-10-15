@@ -138,7 +138,8 @@ for (const [name, path, apiPath] of [['Mealie', '/api/mealie/proxy', '/api/recip
     const before = reached(apiPath);
     const refused = await post(path, friend, body);
     assert.equal(refused.status, 503);
-    assert.match(refused.body.error, new RegExp(OPT_IN), 'names the variable that opens it');
+    assert.equal(refused.body.error, `Could not reach ${name}`, 'the same words as an unreachable service');
+    assert.doesNotMatch(refused.body.error, new RegExp(`${OPT_IN}|[Pp]rivate|loopback`), 'nothing about why');
     assert.equal(reached(apiPath), before, 'nothing reached the private address');
 
     assert.equal((await post(path, admin, body)).status, 200);
@@ -153,10 +154,58 @@ test('push test: a friend cannot reach a private push server, an admin can', asy
   const before = reached('/message');
   const refused = await post('/api/settings/push-test', friend, { service: 'gotify' });
   assert.equal(refused.status, 502);
-  assert.match(refused.body.error, new RegExp(OPT_IN));
+  assert.equal(refused.body.error, 'gotify: could not reach the service');
   assert.equal(reached('/message'), before);
   assert.equal((await post('/api/settings/push-test', admin, { service: 'gotify' })).status, 200);
   assert.equal(reached('/message'), before + 1);
+});
+
+// A refusal a non-admin could tell apart from a failed lookup would map the
+// server's network for them: which names exist, which resolve privately.
+test('push test: a non-admin cannot tell a private address from a name that does not resolve', async (t) => {
+  if (skip(t)) return;
+  const setUrl = (user, url) => db.prepare(
+    'INSERT OR REPLACE INTO user_settings (user_id, key, value) VALUES (?, ?, ?)'
+  ).run(user.id, 'gotifyUrl', JSON.stringify(url));
+  const errorFor = async (user, url) => {
+    setUrl(user, url);
+    return (await post('/api/settings/push-test', user, { service: 'gotify' })).body.error;
+  };
+  const logged = [];
+  const { logger } = await import('../server/logger.js');
+  const warn = logger.warn;
+  logger.warn = (...a) => logged.push(a.join(' '));
+  try {
+    const answers = new Set([
+      await errorFor(friend, home),                          // resolves to loopback
+      await errorFor(friend, 'http://localhost:9/'),         // resolves to loopback by name
+      await errorFor(friend, 'http://nothing-here.invalid/'), // does not resolve
+      await errorFor(friend, 'http://169.254.169.254/'),     // cloud metadata
+    ]);
+    assert.deepEqual([...answers], ['gotify: could not reach the service']);
+    assert.ok(logged.some(l => /Private \/ loopback/.test(l) && l.includes(`user ${friend.id}`)), 'the detail is in the log');
+    assert.ok(logged.some(l => /Could not resolve host/.test(l)));
+
+    // An admin can act on the detail (which variable to set), so gets it.
+    assert.match(await errorFor(admin, 'http://169.254.169.254/'), /^gotify: Link-local \/ cloud-metadata/);
+    assert.match(await errorFor(admin, 'http://nothing-here.invalid/'), /^gotify: Could not resolve host$/, 'as before');
+  } finally {
+    logger.warn = warn;
+    setUrl(friend, home);
+    setUrl(admin, home);
+  }
+});
+
+test('the SSRF refusal follows the database role, not a session signed before a promotion or demotion', async (t) => {
+  if (skip(t)) return;
+  db.prepare(`INSERT OR REPLACE INTO user_settings (user_id, key, value) VALUES (?, 'gotifyUrl', ?)`)
+    .run(friend.id, JSON.stringify('http://169.254.169.254/'));
+  try {
+    const stale = await post('/api/settings/push-test', friend, { service: 'gotify' }, { 'x-test-role': 'admin' });
+    assert.equal(stale.body.error, 'gotify: could not reach the service', 'a token that says admin is not enough');
+  } finally {
+    db.prepare(`INSERT OR REPLACE INTO user_settings (user_id, key, value) VALUES (?, 'gotifyUrl', ?)`).run(friend.id, JSON.stringify(home));
+  }
 });
 
 test('background push follows the account\'s own role', async (t) => {

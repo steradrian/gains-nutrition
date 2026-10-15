@@ -118,6 +118,10 @@ export function authenticate(req, res, next) {
     return res.status(401).json({ error: 'Invalid hub token', code: 'hub_token_invalid' });
   }
   if (hub.kind === 'ok') {
+    // The audit trail of hub requests (LOG_LEVEL=debug): which token, for
+    // whom, asked by what at the hub. Never the token or the raw sub.
+    const { jti, sub, act } = hub.audit;
+    logger.debug(`[hub] ${req.method} ${req.path} scope=${hub.scope} jti=${jti} sub_hash=${sub} act=${act} user=${hub.user.id}`);
     if (hub.scope === 'sync' && !_isApiV1(req.path)) {
       return res.status(401).json({ error: 'Hub sync tokens only reach /api/v1', code: 'hub_token_scope' });
     }
@@ -149,6 +153,16 @@ export function requireAuth(req, res, next) {
   next();
 }
 
+/** Is the signed-in account an admin right now? Read from the users row on
+ *  every call, never from req.user.role: a session token keeps the role it
+ *  was signed with for up to a year, through a demotion, and even after the
+ *  account is deleted. False without a signed-in account. */
+export function hasAdminRole(req) {
+  const id = req?.user?.id;
+  if (id == null) return false;
+  return db.prepare('SELECT role FROM users WHERE id = ?').get(id)?.role === 'admin';
+}
+
 /** Require admin role. When user management is off the whole admin/non-admin
  *  distinction is meaningless (the single user IS the owner), so pass through
  *  in that mode — mirrors requireAuth above. Without this, admin-gated routes
@@ -156,6 +170,6 @@ export function requireAuth(req, res, next) {
  *  though the frontend correctly identifies them as effectively-admin. */
 export function requireAdmin(req, res, next) {
   if (!userMgmtActive()) return next();  // single-user mode = effectively admin
-  if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  if (!hasAdminRole(req)) return res.status(403).json({ error: 'Admin only' });
   next();
 }
