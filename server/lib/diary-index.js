@@ -8,20 +8,38 @@ import { Nutrition } from '../../src/lib/nutrition.js';
 import { foodKey } from './diary-helpers.js';
 import { safeJson } from './mcp/_util.js';
 
+// A page stops after the day that takes its items past this many bytes.
+export const INDEX_MAX_BYTES = 2 * 1024 * 1024;
+
+// Split recipes nest a few levels at most; deeper than this is not read.
+const PARTS_MAX_DEPTH = 6;
+
 const isText = v => typeof v === 'string' && v.trim() !== '';
 
+// A stored item that makes the sum throw (a split nested past the stack, say)
+// counts for nothing: one bad row must not fail the page.
 const kcalOf = item => {
-  const kcal = Number(Nutrition.calculate(item).calories);
-  return Number.isFinite(kcal) ? kcal : 0;
+  try {
+    const kcal = Number(Nutrition.calculate(item).calories);
+    return Number.isFinite(kcal) ? kcal : 0;
+  } catch {
+    return 0;
+  }
 };
 
-// The names of what a split recipe was exploded into, nested splits included.
-function partNames(children) {
+// The names of what a split recipe was exploded into, nested splits included
+// down to PARTS_MAX_DEPTH levels.
+function partNames(children, depth = 1) {
   const names = [];
-  for (const child of children) {
-    if (!child || typeof child !== 'object') continue;
-    if (isText(child.name)) names.push(child.name);
-    if (Array.isArray(child._splitItems)) names.push(...partNames(child._splitItems));
+  if (depth > PARTS_MAX_DEPTH) return names;
+  try {
+    for (const child of children) {
+      if (!child || typeof child !== 'object') continue;
+      if (isText(child.name)) names.push(child.name);
+      if (Array.isArray(child._splitItems)) names.push(...partNames(child._splitItems, depth + 1));
+    }
+  } catch {
+    return [];
   }
   return names;
 }

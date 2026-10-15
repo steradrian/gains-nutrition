@@ -17,6 +17,11 @@ import { isCalendarDate } from './mcp/_util.js';
 
 const SQL_TIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
+// A `where` condition for the search index: only rows whose date is
+// YYYY-MM-DD shaped. The hub drops any other from a page and a client can do
+// nothing with it, so it is left out of the page and of `total`.
+export const INDEX_DATE_GLOB = "date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'";
+
 export const encodeCursor = ({ u, d }) => Buffer.from(JSON.stringify({ u, d })).toString('base64url');
 
 /** The position a cursor names, or null when it is not a cursor. */
@@ -57,16 +62,31 @@ export function keysetSql({ where, params, columns, position }) {
  *            repeats.
  *   hasMore  true only when the cursor moved and rows remain: calling again
  *            within this second would answer the same rows.
+ *
+ * `build` and `maxBytes` cap a page by size: `build(row)` makes what the
+ * caller sends for a row, and the page stops after the row that takes the
+ * built values' JSON past `maxBytes` (a day always goes out whole, and
+ * every page holds at least one). `built` is parallel to `rows`.
  */
-export function readKeysetPage(db, { where, params, columns, position, limit }) {
+export function readKeysetPage(db, { where, params, columns, position, limit, build = null, maxBytes = Infinity }) {
   const { countSql, pageSql, params: bound } = keysetSql({ where, params, columns, position });
   const left = db.prepare(countSql).get(...bound).n;
-  const rows = db.prepare(pageSql).all(...bound, limit);
+  let rows = db.prepare(pageSql).all(...bound, limit);
+  const built = [];
+  if (build) {
+    let bytes = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const value = build(rows[i]);
+      built.push(value);
+      bytes += JSON.stringify(value).length;
+      if (bytes > maxBytes) { rows = rows.slice(0, i + 1); break; }
+    }
+  }
   const now = db.prepare(`SELECT datetime('now') AS now`).get().now;
   let next = position;
   for (const row of rows) {
     if (row.changed >= now) break;
     next = { u: row.changed, d: row.date };
   }
-  return { rows, left, next, hasMore: left > rows.length && next !== position };
+  return { rows, built, left, next, hasMore: left > rows.length && next !== position };
 }

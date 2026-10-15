@@ -3,6 +3,7 @@ import db from '../db.js';
 import { wrap } from '../logger.js';
 import { requireAuth, userMgmtActive } from '../middleware/auth.js';
 import { ensureUuids } from '../lib/diary-merge.js';
+import { isCalendarDate } from '../lib/mcp/_util.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -84,6 +85,8 @@ router.post('/import', wrap((req, res) => {
      VALUES (?, ?, ?, ?, ?, datetime('now'))`
   );
 
+  // Days whose date is not a real YYYY-MM-DD are not imported, and counted.
+  let skippedDiary = 0;
   const run = db.transaction(() => {
     for (const f of foodList) {
       insFood.run(
@@ -122,6 +125,7 @@ router.post('/import', wrap((req, res) => {
     }
     for (const e of diary) {
       if (!e.date) continue;
+      if (!isCalendarDate(e.date)) { skippedDiary++; continue; }
       insDiary.run(
         u, e.date,
         // #239: exports from before per-item uuids carry none; give them one
@@ -155,7 +159,7 @@ router.post('/import', wrap((req, res) => {
   });
 
   run();
-  res.json({ ok: true });
+  res.json({ ok: true, skipped_diary: skippedDiary });
 }));
 
 export default router;

@@ -12,7 +12,7 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import test from 'node:test';
 import { Nutrition } from '../src/lib/nutrition.js';
-import { keysetSql } from '../server/lib/diary-keyset.js';
+import { INDEX_DATE_GLOB, keysetSql } from '../server/lib/diary-keyset.js';
 import { PARITY_DAY_KCAL, PARITY_ITEMS } from './fixtures/contract/diary-index-items.mjs';
 import { PASSWORD, startServer } from './fixtures/contract/server.mjs';
 import { DIARY_INDEX_PAGE } from './fixtures/contract/schemas.mjs';
@@ -175,11 +175,83 @@ test('a malformed items column gives an empty day, not a failed page', async () 
 
 test('GET /api/diary/index is the index, not the day "index"', async () => {
   const a = await account();
+  // A row dated "index" is what /:date would answer with if the route were
+  // read as a date: its items and tombstones, not a page.
+  seedDay(a.id, 'index', { items: [logged({ uuid: 'shadow', name: 'Shadow of the route' })] });
+  seedDay(a.id, '2025-02-01');
   const r = await a.get();
   assert.equal(r.status, 200);
-  assert.ok(Array.isArray(r.body.days) && !('date' in r.body));
-  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM diary WHERE date = 'index'`).get().n, 0, 'no row dated "index"');
+  assertShape(r.body, DIARY_INDEX_PAGE);
+  for (const key of ['date', 'items', 'tombstones', 'body_stats']) assert.ok(!(key in r.body), `the answer is a page, it has no ${key}`);
+  assert.deepEqual(r.body.days.map(d => d.date), ['2025-02-01']);
+  assert.ok(!JSON.stringify(r.body).includes('Shadow of the route'));
   assert.equal((await srv.api('GET', '/api/diary/2026-10-01', undefined, { token: a.token })).body.date, '2026-10-01', '/:date still answers');
+  const asDate = await srv.api('GET', '/api/diary/index', undefined, { token: a.token });
+  assert.ok('days' in asDate.body, 'and /index is still the page after /:date was used');
+});
+
+test('a row whose date is not YYYY-MM-DD is neither listed nor counted', async () => {
+  const a = await account();
+  seedDay(a.id, '2025-03-01');
+  for (const [i, date] of ['not-a-date', '2025-3-1', '2025-03-01x', ' 2025-03-02', '20250302', '2025/03/02', ''].entries()) {
+    seedDay(a.id, date, { updatedAt: `2025-03-10 12:00:0${i}` });
+  }
+  seedDay(a.id, 'bad-deleted', { deletedAt: '2025-03-11 00:00:00' });
+  seedDay(a.id, '2025-03-05', { updatedAt: '2025-03-10 13:00:00' });
+  const { days, pages } = await crawl(a, 2);
+  assert.deepEqual(days.map(d => d.date), ['2025-03-01', '2025-03-05']);
+  assert.ok(pages.every(p => p.total === 2), 'total leaves them out too');
+  assert.equal(pages.at(-1).has_more, false);
+});
+
+test('a bad row cannot fail the page: a split nested past the stack gives 0 kcal, and parts stop at a depth', async () => {
+  const a = await account();
+  const deep = 20_000;
+  const nest = n => '{"uuid":"s","name":"split","nutrition":{"calories":7},"_splitItems":['.repeat(n) + '{"uuid":"leaf","name":"leaf"}' + ']}'.repeat(n);
+  seedDay(a.id, '2025-04-01', { rawItems: `[${nest(deep)}]` });
+  seedDay(a.id, '2025-04-02', { items: [logged({ uuid: 'fine', nutrition: { calories: 90 } })] });
+  const named = (n) => {
+    let node = { uuid: 'bottom', name: `part-${n}` };
+    for (let i = n - 1; i >= 1; i--) node = { uuid: `p${i}`, name: `part-${i}`, _splitItems: [node] };
+    return { uuid: 'nest', name: 'Nested', is_recipe: true, nutrition: { calories: 1 }, _splitItems: [node] };
+  };
+  seedDay(a.id, '2025-04-03', { items: [named(30)] });
+  const r = await a.get();
+  assert.equal(r.status, 200, JSON.stringify(r.body).slice(0, 200));
+  const byDate = Object.fromEntries(r.body.days.map(d => [d.date, d]));
+  assert.equal(byDate['2025-04-01'].kcal, 0);
+  assert.equal(byDate['2025-04-01'].items[0].kcal, 0);
+  assert.equal(byDate['2025-04-02'].kcal, 90, 'the next day is untouched');
+  const parts = byDate['2025-04-03'].items[0].parts;
+  assert.deepEqual(parts, Array.from({ length: 6 }, (_, i) => `part-${i + 1}`), 'six levels of parts, no deeper');
+});
+
+test('a page stops after about 2 MB of days, says has_more, and the crawl still gets every day', async () => {
+  const a = await account();
+  // About 250 KB of index per day.
+  const heavy = Array.from({ length: 1000 }, (_, i) => ({ uuid: `h-${i}`, name: 'x'.repeat(150), meal: 0, nutrition: { calories: 1 } }));
+  const insert = db.transaction(() => { for (let i = 0; i < 24; i++) seedDay(a.id, dateOf(i), { items: heavy }); });
+  insert();
+  const first = await a.get('?limit=24');
+  assert.equal(first.status, 200);
+  assert.ok(first.body.days.length >= 1 && first.body.days.length < 24, `cut at ${first.body.days.length} days`);
+  assert.equal(first.body.has_more, true);
+  const bytes = JSON.stringify(first.body.days).length;
+  assert.ok(bytes > 2 * 1024 * 1024 && bytes < 2.5 * 1024 * 1024, `${bytes} bytes: past the cap by at most one day`);
+  assert.deepEqual(decodeCursor(first.body.next), { u: '2025-03-10 12:00:00', d: first.body.days.at(-1).date }, 'the cursor sits on the last day sent');
+  const { days } = await crawl(a, 24);
+  assert.deepEqual(days.map(d => d.date), Array.from({ length: 24 }, (_, i) => dateOf(i)));
+});
+
+test('one day over the cap still goes out whole', async () => {
+  const a = await account();
+  const giant = Array.from({ length: 12_000 }, (_, i) => ({ uuid: `g-${i}`, name: 'y'.repeat(150), meal: 0, nutrition: { calories: 1 } }));
+  seedDay(a.id, '2025-06-01', { items: giant });
+  seedDay(a.id, '2025-06-02');
+  const first = await a.get();
+  assert.deepEqual(first.body.days.map(d => d.date), ['2025-06-01']);
+  assert.equal(first.body.has_more, true);
+  assert.deepEqual((await a.get(`?since=${first.body.next}`)).body.days.map(d => d.date), ['2025-06-02']);
 });
 
 test('a removed item, a deleted day and a clear-all reach the next poll', async () => {
@@ -272,7 +344,7 @@ test('limit and since are validated with a code', async () => {
     assert.equal(r.body.code, code, query);
     assert.equal(typeof r.body.error, 'string', query);
   };
-  for (const limit of ['0', '501', 'abc', '1.5', '-1', '', '1e2x']) await bad(`?limit=${limit}`, 'bad_limit');
+  for (const limit of ['0', '501', 'abc', '1.5', '-1', '', '1e2x', '010', '+5', '%205', '0x10', '1000']) await bad(`?limit=${limit}`, 'bad_limit');
   await bad('?limit=1&limit=2', 'bad_limit');
   await bad('?since=garbage', 'bad_cursor');
   await bad('?since=', 'bad_cursor');
@@ -340,8 +412,9 @@ test('the handler reads stored JSON only, and its query runs on idx_diary_user_c
     assert.doesNotMatch(source, /\bJOIN\b/);
   }
 
+  assert.match(handler, /INDEX_DATE_GLOB/, 'the page and total both filter on the date shape');
   const { pageSql, countSql, params } = keysetSql({
-    where: ['user_id = ?'], params: [1], columns: 'date, items, deleted_at',
+    where: [INDEX_DATE_GLOB, 'user_id = ?'], params: [1], columns: 'date, items, deleted_at',
     position: { u: '1970-01-01 00:00:00', d: '' },
   });
   for (const [sql, bound] of [[pageSql, [...params, 200]], [countSql, params]]) {
@@ -359,4 +432,40 @@ test('1,100 days come in a few pages, quickly', async () => {
   assert.equal(days.length, 1100);
   assert.equal(pages.length, 6);
   assert.ok(Date.now() - started < 10_000, `a full first load took ${Date.now() - started} ms`);
+});
+
+// Last: it removes every account, which puts the server in single-user mode
+// (no users table rows, no sign-in) for whatever runs after it.
+test('single-user mode: no sign-in, the one owner (user_id NULL) sees every day', async () => {
+  db.prepare('DELETE FROM diary').run();
+  db.prepare('DELETE FROM users').run();
+  db.prepare(`INSERT OR REPLACE INTO app_config (key, value) VALUES ('single_user_mode', '1')`).run();
+  const anon = { token: null };
+  const put = (date, body) => srv.api('PUT', `/api/diary/${date}`, {
+    items: [], body_stats: {}, water: [], notes: '', deleted_uuids: { items: [], water: [] }, ...body,
+  }, anon);
+
+  assert.equal((await put('2026-10-14', { items: [logged({ uuid: 'solo-1', name: 'Solo oats' })] })).status, 200);
+  assert.equal((await put('2026-10-13', { items: [logged({ uuid: 'solo-2' })] })).status, 200);
+  assert.equal((await put('2026-10-12', { items: [] })).status, 200);
+  assert.equal((await srv.api('DELETE', '/api/diary/2026-10-12', undefined, anon)).status, 200);
+  assert.equal((await put('not-a-date', {})).status, 400);
+  seedDay(null, 'legacy-bad');
+
+  const r = await srv.api('GET', '/api/diary/index', undefined, anon);
+  assert.equal(r.status, 200);
+  assertShape(r.body, DIARY_INDEX_PAGE);
+  const byDate = Object.fromEntries(r.body.days.map(d => [d.date, d]));
+  assert.deepEqual(Object.keys(byDate).sort(), ['2026-10-12', '2026-10-13', '2026-10-14']);
+  assert.equal(byDate['2026-10-14'].items[0].name, 'Solo oats');
+  assert.equal(byDate['2026-10-14'].kcal, 152);
+  assert.equal(byDate['2026-10-12'].deleted, true);
+  assert.equal(r.body.total, 2);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM diary WHERE user_id IS NOT NULL').get().n, 0);
+
+  const list = await srv.api('GET', '/api/diary', undefined, anon);
+  assert.equal(list.body.filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d.date)).length, r.body.total, 'total is the dated days of GET /api/diary');
+
+  assert.equal((await srv.api('GET', `/api/diary/index?since=${r.body.next}&limit=1`, undefined, anon)).status, 200);
+  assert.equal((await srv.api('GET', '/api/diary/index?limit=0', undefined, anon)).status, 400);
 });

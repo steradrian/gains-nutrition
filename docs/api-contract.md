@@ -85,9 +85,9 @@ notes and completion marks all live in that row.
 | `GET /api/diary` | none | Every day with a row, `date` ascending, no paging (the whole history). The Statistics screen reads this. |
 | `GET /api/diary/index` | query `since` (the `next` of an earlier response; absent = start of history), `limit` 1..500, default 200 | A search index of the days, in change order: `{ days, total, next, has_more }`. See **Index** below. **400** `{ error, code: "bad_cursor" \| "bad_limit" }` |
 | `GET /api/diary/:date` | none | The day, plus `tombstones`. A day with no row: `{ date, items: [], body_stats: {}, water: [], notes: "", completed_at: null, completed_meals: [], tombstones: [] }` |
-| `PUT /api/diary/:date` | `{ items[], body_stats{}, water[], notes, deleted_uuids: { items: [uuid], water: [uuid] } }`, optional `notes_updated_at`, `client_now` (Android) | The day as stored, plus `tombstones` |
-| `PUT /api/diary/:date/completion` | `{ completed: boolean }` (anything but `false` counts as true) | `{ ok: true, date, completed_at }`. **400** `{ "error": "invalid date" }` unless `:date` is `YYYY-MM-DD` |
-| `PUT /api/diary/:date/meal-completion` | `{ slot: 0..31, completed }` | `{ ok: true, date, completed_meals: [int] }`. **400** for a bad date or `{ "error": "slot must be an integer in [0, 31]" }` |
+| `PUT /api/diary/:date` | `{ items[], body_stats{}, water[], notes, deleted_uuids: { items: [uuid], water: [uuid] } }`, optional `notes_updated_at`, `client_now` (Android) | The day as stored, plus `tombstones`. **400** `{ "error": "invalid date", "code": "bad_date" }` unless `:date` is a real `YYYY-MM-DD` (`2026-02-30` is refused); nothing is written. The same date check applies to the Android push (`POST /api/sync/push`: a day with a bad date is skipped and named in `skipped_diary`, the rest of the batch lands) and to `POST /api/data/import` (skipped; the result carries `skipped_diary`, the count). |
+| `PUT /api/diary/:date/completion` | `{ completed: boolean }` (anything but `false` counts as true) | `{ ok: true, date, completed_at }`. **400** `{ "error": "invalid date", "code": "bad_date" }` unless `:date` is a real `YYYY-MM-DD` |
+| `PUT /api/diary/:date/meal-completion` | `{ slot: 0..31, completed }` | `{ ok: true, date, completed_meals: [int] }`. **400** for a bad date (as above) or `{ "error": "slot must be an integer in [0, 31]" }` |
 | `DELETE /api/diary/:date` | none | `{ ok: true }` (soft delete). The client does not call it today. |
 
 **Day** (`parse()`):
@@ -125,6 +125,12 @@ reduced to what a search on the device needs, read from the stored JSON only
 | `total` | live days this account has, the length of `GET /api/diary`; a lower count than the client holds means rows were removed outright (a restore): rebuild |
 | `next` | always set; pass as `since` to continue or to poll later |
 | `has_more` | another call returns more right now; false while the cursor cannot move |
+
+A page also stops after the day that takes the days' JSON past about 2 MB
+(`has_more` is then true and `next` sits on the last day sent), so a page can
+hold fewer than `limit` days; one day always goes out whole. A row whose date
+is not `YYYY-MM-DD` shaped is left out of the page and of `total`. `limit` is
+plain digits, `1`..`500`.
 
 The cursor is a keyset position on `(updated_at, date)`, the same one
 `GET /api/v1/body-stats` polls with, so any number of rows sharing one second

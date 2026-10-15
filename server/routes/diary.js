@@ -3,8 +3,9 @@ import db from '../db.js';
 import { wrap } from '../logger.js';
 import { requireAuth, userMgmtActive } from '../middleware/auth.js';
 import { freshenItemImages, hydrateItems } from '../lib/diary-helpers.js';
-import { diaryIndexEntry } from '../lib/diary-index.js';
-import { decodeCursor, encodeCursor, readKeysetPage } from '../lib/diary-keyset.js';
+import { INDEX_MAX_BYTES, diaryIndexEntry } from '../lib/diary-index.js';
+import { isCalendarDate } from '../lib/mcp/_util.js';
+import { INDEX_DATE_GLOB, decodeCursor, encodeCursor, readKeysetPage } from '../lib/diary-keyset.js';
 import { mergeEntries } from '../lib/diary-merge.js';
 import { dispatchWebhookEvent } from '../lib/webhooks.js';
 import { getGoalsCore } from '../lib/mcp/tools/goals.js';
@@ -17,6 +18,10 @@ const router = Router();
 router.use(requireAuth);
 
 const uid = req => userMgmtActive() ? req.user.id : null;
+
+// A day that does not exist (2026-02-30, "not-a-date") is never written: the
+// search index and the hub's filter can only carry real dates.
+const _badDate = res => res.status(400).json({ error: 'invalid date', code: 'bad_date' });
 
 // ── Tombstone helpers ─────────────────────────────────────────────────────
 // diary_tombstones records per-uuid deletions for items and water. Clients
@@ -51,7 +56,8 @@ router.get('/', wrap((req, res) => {
 // keyset cursor on (updated_at, date) (lib/diary-keyset.js, the same one
 // GET /api/v1/body-stats polls with). Mounted before '/:date', or Express
 // would read "index" as a date. Same owner predicate as GET /api/diary, so
-// `total` is the length of that list. See docs/api-contract.md, "Diary".
+// `total` is the length of that list, less any row whose date is not
+// YYYY-MM-DD shaped (INDEX_DATE_GLOB). See docs/api-contract.md, "Diary".
 const INDEX_DEFAULT_LIMIT = 200;
 const INDEX_MAX_LIMIT = 500;
 const INDEX_START = { u: '1970-01-01 00:00:00', d: '' };
@@ -60,21 +66,24 @@ const _badIndex = (res, code, error) => res.status(400).json({ error, code });
 router.get('/index', wrap((req, res) => {
   const position = req.query.since == null ? INDEX_START : decodeCursor(req.query.since);
   if (!position) return _badIndex(res, 'bad_cursor', 'since must be the next of a previous response from this route');
-  const limit = req.query.limit == null ? INDEX_DEFAULT_LIMIT : Number(req.query.limit);
-  if (!Number.isInteger(limit) || limit < 1 || limit > INDEX_MAX_LIMIT) {
+  // Same check as the hub's (boundedInt): plain decimal digits, no sign, point or exponent.
+  const rawLimit = req.query.limit;
+  const limit = rawLimit == null ? INDEX_DEFAULT_LIMIT : (typeof rawLimit === 'string' && /^[1-9]\d{0,2}$/.test(rawLimit) ? Number(rawLimit) : 0);
+  if (limit < 1 || limit > INDEX_MAX_LIMIT) {
     return _badIndex(res, 'bad_limit', `limit must be an integer 1..${INDEX_MAX_LIMIT}`);
   }
 
   const u = uid(req);
-  const where = u == null ? [] : ['user_id = ?'];
+  const where = u == null ? [INDEX_DATE_GLOB] : [INDEX_DATE_GLOB, 'user_id = ?'];
   const params = u == null ? [] : [u];
-  const { rows, next, hasMore } = readKeysetPage(db, {
+  const { built: days, next, hasMore } = readKeysetPage(db, {
     where, params, position, limit,
     columns: 'date, items, deleted_at',
+    build: diaryIndexEntry, maxBytes: INDEX_MAX_BYTES,
   });
   const live = ['deleted_at IS NULL', ...where].join(' AND ');
   const total = db.prepare(`SELECT COUNT(*) AS n FROM diary WHERE ${live}`).get(...params).n;
-  res.json({ days: rows.map(diaryIndexEntry), total, next: encodeCursor(next), has_more: hasMore });
+  res.json({ days, total, next: encodeCursor(next), has_more: hasMore });
 }));
 
 // Get single date. Response includes tombstones so pulling clients can
@@ -141,6 +150,7 @@ function _stripDataUrlImages(items) {
 // The whole write runs inside a single db.transaction so a crash mid-merge
 // leaves the row untouched.
 router.put('/:date', wrap((req, res) => {
+  if (!isCalendarDate(req.params.date)) return _badDate(res);
   const receivedAt = Date.now();
   const { body_stats, water, notes } = req.body;
   const items = _stripDataUrlImages(req.body.items);
@@ -308,9 +318,7 @@ router.put('/:date/completion', wrap((req, res) => {
   const receivedAt = Date.now();
   const u = uid(req);
   const date = String(req.params.date || '');
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return res.status(400).json({ error: 'invalid date' });
-  }
+  if (!isCalendarDate(date)) return _badDate(res);
   const completed = req.body?.completed !== false;
 
   const existing = u == null
@@ -363,9 +371,7 @@ router.put('/:date/completion', wrap((req, res) => {
 router.put('/:date/meal-completion', wrap((req, res) => {
   const u = uid(req);
   const date = String(req.params.date || '');
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return res.status(400).json({ error: 'invalid date' });
-  }
+  if (!isCalendarDate(date)) return _badDate(res);
   const slot = Number(req.body?.slot);
   if (!Number.isInteger(slot) || slot < 0 || slot > 31) {
     return res.status(400).json({ error: 'slot must be an integer in [0, 31]' });
