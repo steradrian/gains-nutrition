@@ -10,7 +10,8 @@
  * Algorithm (same as server):
  *   1. Pull 35 days of daily intake (sum of diary.items calories) + daily
  *      weight (priority: wellness_data 'weight_kg', fallback to manual
- *      body_stats.weight with weight_unit conversion).
+ *      body_stats.weight with weight_unit conversion; an untagged one is
+ *      read in the weightUnit setting, src/lib/untagged-weight.js).
  *   2. Linearly interpolate weight gaps between known measurements.
  *   3. Require ≥21 valid days. Otherwise ready=false.
  *   4. slope_kg_per_day × 7700 kcal/kg = daily energy balance.
@@ -18,9 +19,9 @@
  */
 
 import { getDb, LOCAL_USER_ID } from './db-native.js';
+import { bodyStatsWeightKg, untaggedUnitFromSetting } from './untagged-weight.js';
 
 const KCAL_PER_KG = 7700;
-const LB_TO_KG = 1 / 2.20462;
 const DEFAULT_WINDOW_DAYS = 35;
 const MIN_VALID_DAYS = 21;
 
@@ -43,18 +44,6 @@ function _sumDailyIntake(itemsJson) {
     total += Number(kcal) * Number(qty);
   }
   return total > 0 ? total : null;
-}
-
-function _bodyStatsWeightKg(bodyStatsJson) {
-  if (!bodyStatsJson) return null;
-  let bs;
-  try { bs = typeof bodyStatsJson === 'string' ? JSON.parse(bodyStatsJson) : bodyStatsJson; } catch { return null; }
-  const raw = bs?.weight;
-  if (raw == null || raw === '') return null;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  const unit = bs.weight_unit || 'kg';
-  return unit === 'lb' ? n * LB_TO_KG : n;
 }
 
 function _linReg(points) {
@@ -97,6 +86,12 @@ export async function computeAdaptiveTdeeLocal(opts = {}) {
      ORDER BY date ASC`,
     [LOCAL_USER_ID, startDate, endDate]
   );
+  // An untagged weight is read in the weightUnit setting, as the server does.
+  const unitRes = await db.query(
+    `SELECT value FROM user_settings WHERE user_id = ? AND key = 'weightUnit' AND deleted_at IS NULL`,
+    [LOCAL_USER_ID]
+  );
+  const untaggedUnit = untaggedUnitFromSetting(unitRes?.values?.[0]?.value);
   const wellRes = await db.query(
     `SELECT date, source, value FROM wellness_data
      WHERE user_id = ? AND metric_type = 'weight_kg'
@@ -122,7 +117,7 @@ export async function computeAdaptiveTdeeLocal(opts = {}) {
   for (const r of (diaryRes?.values || [])) {
     const intake = _sumDailyIntake(r.items);
     if (intake != null) intakeByDate.set(r.date, intake);
-    const w = _bodyStatsWeightKg(r.body_stats);
+    const w = bodyStatsWeightKg(r.body_stats, untaggedUnit);
     if (w != null) manualByDate.set(r.date, w);
   }
 

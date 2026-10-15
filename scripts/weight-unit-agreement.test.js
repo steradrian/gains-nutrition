@@ -82,3 +82,43 @@ test('GET /api/v1/body-stats and the adaptive TDEE agree on an untagged lb histo
     assert.ok(Math.abs(tdee.trendKgPerWeek - apiPerWeek) < 0.02, `TDEE ${tdee.trendKgPerWeek} vs body-stats ${apiPerWeek.toFixed(3)} kg/week`);
   } finally { server.close(); }
 });
+
+// ── The standalone Android app (src/lib/adaptive-tdee-local.js) ───────────
+// It cannot be imported here (it opens the phone's SQLite), so what it
+// decides with lives in src/lib/untagged-weight.js, held to the server's
+// answer below, and the wiring is checked in the source.
+test('the standalone app reads an untagged weight the way the server does', async () => {
+  const client = await import('../src/lib/untagged-weight.js');
+  const server = await import('../server/lib/body-weight.js');
+  const settings = [
+    ['lb', '"lb"'], ['kg', '"kg"'], ['unset', null], ['junk', '"stone"'], ['bare', 'kg'],
+  ];
+  const stats = [
+    { weight: 200 }, { weight: '200' }, { weight: 90, weight_unit: 'kg' }, { weight: 200, weight_unit: 'lb' },
+    { weight: 0 }, { weight: -5 }, { weight: '' }, { weight: null }, { weight: 'abc' }, {},
+  ];
+  for (const [name, stored] of settings) {
+    const id = Number(db.prepare(`INSERT INTO users (username, password_hash, role) VALUES (?, 'x', 'user')`).run(`parity-${name}`).lastInsertRowid);
+    if (stored != null) db.prepare(`INSERT INTO user_settings (user_id, key, value) VALUES (?, 'weightUnit', ?)`).run(id, stored);
+    const serverUnit = server.untaggedWeightUnit(id);
+    const clientUnit = client.untaggedUnitFromSetting(stored);
+    assert.equal(clientUnit, serverUnit, `unit for setting ${name}`);
+    for (const bs of stats) {
+      for (const form of [bs, JSON.stringify(bs)]) {
+        assert.equal(client.bodyStatsWeightKg(form, clientUnit), server.bodyStatsWeightKg(form, serverUnit), `${name} ${JSON.stringify(bs)}`);
+      }
+    }
+  }
+  assert.equal(client.bodyStatsWeightKg('not json', 'lb'), null);
+  assert.equal(client.untaggedUnitFromSetting(undefined), 'lb', 'unset: the app\'s default, lb');
+  assert.ok(Math.abs(client.bodyStatsWeightKg({ weight: 200 }, client.untaggedUnitFromSetting('"lb"')) - 90.72) < 0.01, '200 untagged, lb user: 90.7 kg, not 200');
+});
+
+test('adaptive-tdee-local.js reads the weightUnit setting instead of assuming kg', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../src/lib/adaptive-tdee-local.js', import.meta.url), 'utf8');
+  assert.match(src, /import \{ bodyStatsWeightKg, untaggedUnitFromSetting \} from '\.\/untagged-weight\.js'/);
+  assert.match(src, /key = 'weightUnit' AND deleted_at IS NULL/);
+  assert.match(src, /bodyStatsWeightKg\(r\.body_stats, untaggedUnit\)/);
+  assert.doesNotMatch(src, /weight_unit \|\| 'kg'/, 'no untagged-means-kg fallback');
+});
