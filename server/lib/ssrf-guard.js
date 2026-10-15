@@ -26,31 +26,57 @@ import { Agent, fetch as undiciFetch } from 'undici';
 
 const _CLOUD_META = new Set(['100.100.100.200', '168.63.129.16']);
 
-// The IPv4 address inside an IPv4-mapped (::ffff:a.b.c.d) or NAT64
-// (64:ff9b::a.b.c.d) IPv6 address, or null.
-function _embeddedV4(ip) {
-  const lo = ip.toLowerCase();
-  const m = lo.match(/^(?:::ffff:|64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/);
-  if (m) return m[1];
-  const h = lo.match(/^(?:::ffff:|64:ff9b::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
-  if (h) {
-    const a = parseInt(h[1], 16), b = parseInt(h[2], 16);
-    return `${a >> 8}.${a & 255}.${b >> 8}.${b & 255}`;
+/**
+ * The eight 16-bit groups of an IPv6 address (any spelling: `::`, a
+ * trailing dotted quad, a zone id), or null when it is not one.
+ */
+export function ipv6Groups(ip) {
+  let s = String(ip ?? '').toLowerCase();
+  const zone = s.indexOf('%');
+  if (zone >= 0) s = s.slice(0, zone);
+  if (!net.isIPv6(s)) return null;
+  const quad = s.match(/^(.*:)(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (quad) {
+    const [a, b, c, d] = quad.slice(2).map(Number);
+    s = `${quad[1]}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
   }
+  const halves = s.split('::');
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length > 1 && halves[1] ? halves[1].split(':') : [];
+  const fill = halves.length > 1 ? 8 - head.length - tail.length : 0;
+  const groups = [...head, ...Array(fill).fill('0'), ...tail].map(g => parseInt(g, 16));
+  return groups.length === 8 && groups.every(g => g >= 0 && g <= 0xffff) ? groups : null;
+}
+
+const _v4 = (hi, lo) => `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+const _zero = (g, from, to) => g.slice(from, to).every(x => x === 0);
+
+// The IPv4 address an IPv6 address stands for, or null:
+//   ::ffff:a.b.c.d      IPv4-mapped
+//   ::ffff:0:a.b.c.d    IPv4-translated (SIIT)
+//   ::a.b.c.d           IPv4-compatible (deprecated, ::7f00:1 is 127.0.0.1),
+//                       but not :: or ::1
+//   64:ff9b::a.b.c.d    NAT64 well-known prefix
+//   2002:AABB:CCDD::/48 6to4, the IPv4 address in groups 1 and 2
+function _embeddedV4(g) {
+  if (_zero(g, 0, 5) && g[5] === 0xffff) return _v4(g[6], g[7]);
+  if (_zero(g, 0, 4) && g[4] === 0xffff && g[5] === 0) return _v4(g[6], g[7]);
+  if (_zero(g, 0, 6) && !(g[6] === 0 && g[7] <= 1)) return _v4(g[6], g[7]);
+  if (g[0] === 0x64 && g[1] === 0xff9b && _zero(g, 2, 6)) return _v4(g[6], g[7]);
+  if (g[0] === 0x2002) return _v4(g[1], g[2]);
   return null;
 }
 
 export function isLinkLocalOrCloudMeta(ip) {
   if (net.isIPv4(ip)) return ip.startsWith('169.254.') || _CLOUD_META.has(ip);
-  if (net.isIPv6(ip)) {
-    const v4 = _embeddedV4(ip);
+  const g = ipv6Groups(ip);
+  if (g) {
+    const v4 = _embeddedV4(g);
     if (v4) return isLinkLocalOrCloudMeta(v4);
-    const lo = ip.toLowerCase();
-    if (lo === 'fd00:ec2::254') return true;
-    // fe80::/10 = fe80..febf in the first hextet
-    if (/^fe[89ab]/.test(lo)) return true;
-    // IPv4-mapped link-local (e.g. ::ffff:169.254.169.254)
-    if (lo.startsWith('::ffff:169.254.')) return true;
+    // fd00:ec2::254, AWS's IPv6 metadata address
+    if (g[0] === 0xfd00 && g[1] === 0xec2 && _zero(g, 2, 7) && g[7] === 0x254) return true;
+    // fe80::/10, link-local
+    if ((g[0] & 0xffc0) === 0xfe80) return true;
   }
   return false;
 }
@@ -68,16 +94,15 @@ export function isPrivateOrLoopback(ip) {
     if (o[0] >= 224) return true;                                  // multicast, reserved, broadcast
     return false;
   }
-  if (net.isIPv6(ip)) {
-    const v4 = _embeddedV4(ip);
+  const g = ipv6Groups(ip);
+  if (g) {
+    const v4 = _embeddedV4(g);
     if (v4) return isPrivateOrLoopback(v4);
-    const lo = ip.toLowerCase();
-    if (/^ff/.test(lo)) return true;                               // multicast
-    if (lo === '::1' || lo === '::' || lo === '0:0:0:0:0:0:0:1') return true;
-    // Unique-local addresses fc00::/7 = fc00..fdff
-    if (/^f[cd]/.test(lo)) return true;
-    // IPv4-mapped private
-    if (/^::ffff:(0|127|10|192\.168|172\.(1[6-9]|2[0-9]|3[01])|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7]))\./i.test(lo)) return true;
+    if (_zero(g, 0, 7) && g[7] <= 1) return true;                  // :: and ::1
+    if ((g[0] & 0xff00) === 0xff00) return true;                   // ff00::/8 multicast
+    if ((g[0] & 0xfe00) === 0xfc00) return true;                   // fc00::/7 unique-local
+    if ((g[0] & 0xffc0) === 0xfec0) return true;                   // fec0::/10 site-local (deprecated)
+    if (g[0] === 0x64 && g[1] === 0xff9b && g[2] === 1) return true; // 64:ff9b:1::/48 local-use NAT64
   }
   return false;
 }

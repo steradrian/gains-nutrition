@@ -26,7 +26,7 @@
  */
 import db from '../db.js';
 import { logger } from '../logger.js';
-import { userMgmtActive } from '../middleware/auth.js';
+import { hasAdminRole, userMgmtActive } from '../middleware/auth.js';
 
 const KNOWN_KEY = 'known_origins';   // JSON list, newest last
 const LATEST_KEY = 'app_url';        // the admin's latest address
@@ -104,7 +104,7 @@ const _store = {
 };
 const _publicUrl = createPublicUrl(_store, {
   warn: (m) => logger.warn(m),
-  isAdmin: (req) => !userMgmtActive() || req?.user?.role === 'admin',
+  isAdmin: (req) => !userMgmtActive() || hasAdminRole(req),
 });
 
 export const rememberAdminOrigin = (req) => { try { _publicUrl.remember(req); } catch (e) { logger.warn(`[public-url] ${e.message}`); } };

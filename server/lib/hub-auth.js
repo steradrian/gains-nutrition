@@ -309,7 +309,8 @@ export const linkHubUser = db.transaction(({ userId, issuer, sub, replace = fals
  * The hub's say on a request's bearer token, for middleware/auth.js:
  *   { kind: 'none' }                  not a hub token (or the hub is off)
  *   { kind: 'invalid', reason }       a hub token that failed: refuse with 401
- *   { kind: 'ok', scope, user }       verified; user is the database row
+ *   { kind: 'ok', scope, user, audit } verified; user is the database row,
+ *                                     audit is hubAuditFields()
  */
 export function hubBearer(token) {
   const config = hubConfig();
@@ -331,9 +332,32 @@ export function headerCarriesHubToken(header) {
   return header.split(/[^A-Za-z0-9_.-]+/).some(t => looksLikeHubToken(t, config));
 }
 
+// Printable ASCII only, bounded: the claim is the hub's, but it ends up in
+// a log line.
+const _printable = (value, max = 64) => String(value).replace(/[^\x20-\x7e]/g, '?').slice(0, max);
+
+/**
+ * What a hub request's audit line may say about its token: the jti, the
+ * person as a hash (the same one their `hub-` username starts from, so a
+ * line leads to the account without naming the hub's user id) and `act`,
+ * who at the hub asked (absent: '-'). Never the token or the raw sub.
+ */
+export function hubAuditFields(issuer, claims) {
+  const act = claims.act == null ? '-'
+    : _printable(typeof claims.act === 'string' ? claims.act : JSON.stringify(claims.act));
+  return {
+    jti: claims.jti,
+    sub: crypto.createHash('sha256').update(`${issuer}\0${claims.sub}`).digest('hex').slice(0, 16),
+    act,
+  };
+}
+
 function _verified(token, config) {
   const result = verifyHubToken(token, config);
   if (!result.ok) return { kind: 'invalid', reason: result.reason };
   const { claims } = result;
-  return { kind: 'ok', scope: claims.scope, user: resolveHubUser(config.issuer, claims) };
+  return {
+    kind: 'ok', scope: claims.scope, user: resolveHubUser(config.issuer, claims),
+    audit: hubAuditFields(config.issuer, claims),
+  };
 }

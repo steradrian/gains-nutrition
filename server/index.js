@@ -42,7 +42,7 @@ import nutritionImportRoutes from './routes/nutrition-import.js';
 import offLocalRoutes from './routes/off-local.js';
 import updatesRoutes  from './routes/updates.js';
 import { logger }   from './logger.js';
-import { authenticate, userMgmtActive } from './middleware/auth.js';
+import { authenticate, hasAdminRole, userMgmtActive } from './middleware/auth.js';
 import { csrfProtect } from './middleware/csrf.js';
 import { makeRateLimiter } from './middleware/rate-limit.js';
 import {
@@ -192,7 +192,7 @@ router.use(authenticate);   // attach req.user on every request
 // invite, sharing) go there instead of to whatever Host a request claims.
 // Not a hub request: those arrive on the hub's internal address for us.
 router.use((req, res, next) => {
-  if (req.user?.role === 'admin' && req.authVia !== 'hub') rememberAdminOrigin(req);
+  if (req.user?.role === 'admin' && req.authVia !== 'hub' && hasAdminRole(req)) rememberAdminOrigin(req);
   next();
 });
 router.use(csrfProtect);   // CSRF protection for cookie-based sessions

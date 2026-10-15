@@ -5,13 +5,14 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import db from '../db.js';
 import { wrap } from '../logger.js';
-import { signToken, sessionMaxAge, userMgmtActive, requireAuth, requireAdmin } from '../middleware/auth.js';
+import { signToken, sessionMaxAge, userMgmtActive, requireAuth, requireAdmin, hasAdminRole } from '../middleware/auth.js';
 import { listProviders as oidcListProviders, publicProvider as oidcPublicProvider, isPasswordLoginEnabled, listUserLinks } from '../lib/oidc.js';
 import { sendPasswordReset, sendInvite, isEmailConfigured } from '../email.js';
 import { estimate as estimatePasswordStrength, STRONG_MIN_SCORE } from '../lib/password-strength.js';
 import { claimAnonymousData, purgeUnreferencedUserData, purgeUserRows } from '../lib/claim-anonymous-data.js';
 import { ownerOrOptIn } from '../lib/outbound-policy.js';
 import { HUB_USERNAME_ERROR, isHubManaged, isReservedUsername } from '../lib/hub-auth.js';
+import { clientKey, createBuckets } from '../lib/login-throttle.js';
 
 const HUB_MANAGED = { error: 'This account signs in through the hub; its password is managed there.', code: 'hub_managed' };
 
@@ -39,39 +40,19 @@ function validatePassword(pw, userInputs = []) {
 
 // In-memory rate limiters for auth endpoints. Two independent buckets so an
 // attacker behind multiple IPs can't get unlimited tries against one username,
-// and a shared NAT can't lock everyone out of one account.
-const _ipAttempts   = new Map(); // ip → { count, resetAt }
-const _userAttempts = new Map(); // username → { count, resetAt }
+// and a shared NAT can't lock everyone out of one account. Both are capped
+// in size, and IPv6 clients count per /64 (lib/login-throttle.js).
 const WINDOW_MS = 15 * 60 * 1000; // 15-min window
-const IP_MAX    = 10;
-const USER_MAX  = 5;
-const _lastSweep = new Map(); // bucket map → when it was last swept
-
-function _bumpBucket(map, key, max) {
-  const now = Date.now();
-  const entry = map.get(key);
-  if (entry && now < entry.resetAt) {
-    entry.count++;
-    if (entry.count > max) return false;
-  } else {
-    map.set(key, { count: 1, resetAt: now + WINDOW_MS });
-  }
-  // At most one sweep a minute: with TRUST_PROXY every visitor has its own
-  // key, and sweeping on every new one made each attempt cost the whole map.
-  if (map.size > 1000 && now - (_lastSweep.get(map) ?? 0) > 60_000) {
-    _lastSweep.set(map, now);
-    for (const [k, v] of map) { if (now > v.resetAt) map.delete(k); }
-  }
-  return true;
-}
+const _ipAttempts   = createBuckets({ max: 10, windowMs: WINDOW_MS }); // address (IPv6: its /64)
+const _userAttempts = createBuckets({ max: 5, windowMs: WINDOW_MS });  // username
 
 function rateLimitLogin(req, res, next) {
-  const ip = req.ip || req.connection.remoteAddress;
+  const ip = clientKey(req.ip || req.connection.remoteAddress);
   const username = (req.body?.username || '').trim().toLowerCase();
-  if (!_bumpBucket(_ipAttempts, ip, IP_MAX)) {
+  if (!_ipAttempts.hit(ip)) {
     return res.status(429).json({ error: 'Too many login attempts. Try again in a few minutes.' });
   }
-  if (username && !_bumpBucket(_userAttempts, username, USER_MAX)) {
+  if (username && !_userAttempts.hit(username)) {
     return res.status(429).json({ error: 'Too many login attempts for this account. Try again later.' });
   }
   next();
@@ -209,8 +190,9 @@ router.post('/logout', (req, res) => {
 router.post('/register', wrap((req, res) => {
   const isFirst = !userMgmtActive();
 
-  // Only first registration is open; subsequent require admin JWT
-  if (!isFirst && (!req.user || req.user.role !== 'admin')) {
+  // Only first registration is open; subsequent require an admin (the role
+  // as stored now, not as the session token remembers it)
+  if (!isFirst && !hasAdminRole(req)) {
     return res.status(403).json({ error: 'Admin only' });
   }
 

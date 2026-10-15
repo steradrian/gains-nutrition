@@ -18,7 +18,7 @@ import { requireAuth, userMgmtActive } from '../middleware/auth.js';
 import db from '../db.js';
 import { fetchChecked, serviceBase, readBody } from '../lib/ssrf-guard.js';
 import { apiPathFor, COOKTRACE_API } from '../lib/service-paths.js';
-import { homeServiceAllowed, SERVICE_OPT_IN } from '../lib/outbound-policy.js';
+import { addressErrorForClient, homeServiceAllowed, SERVICE_OPT_IN } from '../lib/outbound-policy.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -94,8 +94,8 @@ router.post('/proxy', async (req, res) => {
     } catch (fetchErr) {
       clearTimeout(timer);
       logger.warn(`[cooktrace-proxy ${rid}] fetch failed: ${fetchErr.message}`);
-      const refused = /addresses are (not allowed|blocked)/.test(fetchErr.message);
-      return res.status(503).json({ error: refused ? fetchErr.message : 'Could not reach CookTrace' });
+      const generic = 'Could not reach CookTrace';
+      return res.status(503).json({ error: addressErrorForClient(req, fetchErr, generic, 'cooktrace-proxy') ?? generic });
     }
     clearTimeout(timer);
 
