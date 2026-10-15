@@ -30,7 +30,7 @@ import { hubInstance } from './hub-auth.js';
 // OIDC first-login bootstrap), so this lives here rather than in either
 // route and both call it.
 export const CLAIM_NULL = [
-  'foods', 'meals', 'diary', 'diary_tombstones',
+  'foods', 'meals', 'diary', 'diary_tombstones', 'diary_quarantine',
   'activity_log', 'fasts', 'ai_chat_history',
   // Deletes waiting for phones to pull: they follow the rows they removed.
   'sync_deletions',
@@ -123,7 +123,7 @@ export function repairOrphanedData() {
 // (NULL, or the 0 sentinel) belong to single-user mode, which is the state
 // the instance is returning to, so they stay readable.
 const NO_CASCADE_TABLES = [
-  'wellness_data', 'workouts',
+  'wellness_data', 'workouts', 'diary_quarantine',
   'fitbit_tokens', 'google_health_tokens', 'withings_tokens', 'garmin_tokens',
   'oauth_state',
 ];

@@ -1,6 +1,6 @@
 // The response shapes the contract pins (docs/api-contract.md). Shared by
 // the per-feature contract tests. See shape.mjs for the schema notation.
-import { oneOf } from './shape.mjs';
+import { oneOf, optional } from './shape.mjs';
 
 const NULLABLE_TEXT = 'string|null';
 
@@ -47,6 +47,19 @@ export const DIARY_DAY = {
   notes_updated_at: NULLABLE_TEXT, completion_marked_at: NULLABLE_TEXT,
   // A raw JSON string, unlike completed_meals.
   meal_marks_at: 'json|null',
+};
+
+// GET /api/diary/index (server/lib/diary-index.js): a day reduced to what a
+// search on the device needs. brand and parts are left out when empty.
+export const DIARY_INDEX_ITEM = {
+  uuid: 'string', name: 'string', brand: 'string?', food_id: 'integer|null', meal: 'integer', kcal: 'integer', parts: optional(['string']),
+};
+// truncated is only ever true: the day alone passed the page cap and its items were cut to fit.
+export const DIARY_INDEX_LIVE_DAY = { date: 'date', rev: 'isotime', kcal: 'integer', items: [DIARY_INDEX_ITEM], truncated: optional('boolean') };
+export const DIARY_INDEX_DELETED_DAY = { date: 'date', rev: 'isotime', deleted: 'boolean' };
+export const DIARY_INDEX_PAGE = {
+  days: [oneOf(DIARY_INDEX_LIVE_DAY, DIARY_INDEX_DELETED_DAY)],
+  total: 'integer', next: 'string', has_more: 'boolean',
 };
 
 // GET /api/diary/:date for a day with no row.

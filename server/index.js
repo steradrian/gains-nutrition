@@ -183,11 +183,7 @@ router.use('/uploads', express.static(uploadsPath, {
   setHeaders(res) { res.set('Cache-Control', 'public, max-age=3600'); res.set(UPLOAD_RESPONSE_HEADERS); }
 }));
 
-// Proxy also before auth — used by Android WebView to load external images
-// (DuckDuckGo, Walmart, etc. block direct WebView requests)
-router.use('/api/proxy', proxyRoutes);
-
-router.use(authenticate);   // attach req.user on every request
+router.use(authenticate);   // sets req.user (null without a session); refuses a bad hub token
 // Remember the address an admin uses, so emailed links (password reset,
 // invite, sharing) go there instead of to whatever Host a request claims.
 // Not a hub request: those arrive on the hub's internal address for us.
@@ -195,7 +191,16 @@ router.use((req, res, next) => {
   if (req.user?.role === 'admin' && req.authVia !== 'hub' && hasAdminRole(req)) rememberAdminOrigin(req);
   next();
 });
-router.use(csrfProtect);   // CSRF protection for cookie-based sessions
+// The proxy needs no sign-in, because Android WebView and old
+// <img src="/api/proxy?url=..."> diary images call it without a token.
+// authenticate attaches who it can, and passes a request with no session on
+// as anonymous. It does refuse a bad credential: an invalid hub token is a
+// 401, a full hub replay cache a 503, and a hub sync-scope token outside
+// /api/v1 a 401. The proxy sits after it so its rate limit is keyed per
+// account when there is a session (the hub's tokens, the app's) and per
+// address only without one.
+router.use('/api/proxy', proxyRoutes);
+router.use(csrfProtect);  // CSRF protection for cookie-based sessions
 // Optional body summaries are captured only from parsed, access-checked requests.
 router.use(captureRequestTraceBody);
 
@@ -256,7 +261,6 @@ router.use('/api/v1', apiV1Routes);
 // unless MCP_ENABLED=1 in the server env. See server/routes/mcp.js and
 // server/lib/mcp/ for the tool implementations. Issue #103.
 router.use('/api/mcp', mcpRoutes);
-// proxy already registered before auth (line 64)
 router.use('/api/data',   dataRoutes);
 router.use('/api/foods',  foodsRoutes);
 router.use('/api/meals',  mealsRoutes);

@@ -101,7 +101,11 @@ test('PUT /api/diary/:date/completion marks and unmarks the day', async () => {
   assertShape(off.body, { ok: 'boolean', date: 'date', completed_at: 'null' });
   const bad = await srv.api('PUT', '/api/diary/14-10-2026/completion', { completed: true });
   assert.equal(bad.status, 400);
-  assert.deepEqual(bad.body, { error: 'invalid date' });
+  assert.deepEqual(bad.body, { error: 'invalid date', code: 'bad_date' });
+  const missing = await srv.api('PUT', '/api/diary/2026-02-30/completion', { completed: true });
+  assert.equal(missing.status, 400, 'a day that does not exist is refused, not given a row');
+  const slot = await srv.api('PUT', '/api/diary/2026-02-30/meal-completion', { slot: 1, completed: true });
+  assert.deepEqual([slot.status, slot.body.code], [400, 'bad_date']);
 });
 
 test('PUT /api/diary/:date/meal-completion marks one meal slot (0..31)', async () => {
@@ -123,10 +127,16 @@ test('without a session: 401', async () => {
   assert.deepEqual(r.body, { error: 'Not authenticated' });
 });
 
-// Found while writing the contract: PUT /api/diary/:date takes any path
-// segment as the date (only /completion and /meal-completion check it), so
-// a client bug can write a day no screen will ever show.
-test('PUT /api/diary/:date refuses a date that is not YYYY-MM-DD', { todo: 'server does not validate the diary date (routes/diary.js PUT /:date)' }, async () => {
-  const r = await put('not-a-date', { items: [item({ uuid: 'bad-date' })] });
-  assert.equal(r.status, 400);
+// Found while writing the contract: PUT /api/diary/:date took any path
+// segment as the date, so a client bug could write a day no screen will ever
+// show, and one such row broke the search index for its owner for good.
+test('PUT /api/diary/:date refuses a date that is not a real YYYY-MM-DD, and writes nothing', async () => {
+  for (const date of ['not-a-date', '2026-02-30', '2026-13-01', '2026-1-5', '20261005', '2026-10-05x', '0000-00-00']) {
+    const r = await put(date, { items: [item({ uuid: 'bad-date' })] });
+    assert.equal(r.status, 400, date);
+    assert.deepEqual(r.body, { error: 'invalid date', code: 'bad_date' }, date);
+  }
+  const all = await srv.api('GET', '/api/diary');
+  assert.ok(all.body.every(d => /^\d{4}-\d{2}-\d{2}$/.test(d.date) && d.items.every(i => i.uuid !== 'bad-date')), 'no row was made');
+  assert.equal((await put('2024-02-29', { items: [] })).status, 200, 'a leap day is a real date');
 });
