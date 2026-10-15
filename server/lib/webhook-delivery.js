@@ -26,13 +26,16 @@ export function signEnvelope(secret, event, data) {
 /**
  * POST one already-signed envelope to `url`. Throws on a non-2xx
  * response, a network error, or the fetch timing out, callers decide
- * whether/how to retry.
+ * whether/how to retry. `fetchImpl` is how it connects: webhooks.js
+ * passes the SSRF guard's fetchChecked, which resolves the host, checks
+ * every address and connects only to those (no second lookup a DNS
+ * rebinding could answer differently).
  */
-export async function sendWebhookRequest(url, envelope, signature, deliveryId, event) {
+export async function sendWebhookRequest(url, envelope, signature, deliveryId, event, { fetchImpl = fetch } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(url, {
+    const res = await fetchImpl(url, {
       method: 'POST',
       // Do not follow a redirect: a compromised or malicious endpoint
       // could 3xx this request to an internal address (169.254.169.254,

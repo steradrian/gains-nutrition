@@ -23,7 +23,7 @@
 import { randomBytes, randomUUID } from 'crypto';
 import db from '../db.js';
 import { encrypt, decrypt } from './token-crypto.js';
-import { assertSafeUrl } from './ssrf-guard.js';
+import { assertSafeUrl, fetchChecked } from './ssrf-guard.js';
 import { signEnvelope, sendWebhookRequest } from './webhook-delivery.js';
 import { logger } from '../logger.js';
 
@@ -147,13 +147,21 @@ function _recordDelivery(id, status, error) {
   ).run(status, error ? String(error).slice(0, 500) : null, id);
 }
 
+// The guard's fetch: resolves the host, checks every address, and connects
+// only to those. No redirects (a 3xx is a failed delivery).
+const _guardedFetch = (url, init) => fetchChecked(url, init, {
+  allowPrivate: ALLOW_PRIVATE_WEBHOOK_URLS,
+  allowPrivateEnvHint: 'ALLOW_PRIVATE_WEBHOOK_URLS',
+  maxRedirects: 0,
+});
+
 /**
  * Deliver one event to one webhook row, with retry. Re-validates the
- * target via assertSafeUrl immediately before sending, not just once at
- * creation time, since DNS can change between the two. Always resolves
- * (never throws) since this is called fire-and-forget; failure is
- * recorded on the row for the Settings UI to surface, not propagated to
- * the caller.
+ * target immediately before sending, not just once at creation time,
+ * since DNS can change between the two, and connects to the address it
+ * validated. Always resolves (never throws) since this is called
+ * fire-and-forget; failure is recorded on the row for the Settings UI to
+ * surface, not propagated to the caller.
  */
 async function _deliverWithRetry(row, event, data) {
   const deliveryId = randomUUID();
@@ -170,16 +178,11 @@ async function _deliverWithRetry(row, event, data) {
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     try {
-      // Re-validated on EVERY attempt, not just once before the loop:
-      // an attacker who controls DNS for the webhook's hostname could
-      // otherwise point it at a public IP for this check, then rebind
-      // to an internal address before a later retry fires (up to ~2.5s
-      // later), and the guard would never look again.
-      await assertSafeUrl(row.url, {
-        allowPrivate: ALLOW_PRIVATE_WEBHOOK_URLS,
-        allowPrivateEnvHint: 'ALLOW_PRIVATE_WEBHOOK_URLS',
-      });
-      await sendWebhookRequest(row.url, envelope, signature, deliveryId, event);
+      // Re-validated on EVERY attempt, and the connection goes to the
+      // address that was validated: checking and then fetching separately
+      // let a hostname answer the check with a public address and the
+      // fetch's own lookup with an internal one (DNS rebinding).
+      await sendWebhookRequest(row.url, envelope, signature, deliveryId, event, { fetchImpl: _guardedFetch });
       _recordDelivery(row.id, 'success', null);
       return;
     } catch (e) {

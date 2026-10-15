@@ -4,7 +4,7 @@ import { wrap } from '../logger.js';
 import { requireAuth, userMgmtActive } from '../middleware/auth.js';
 import { isServerOnlyKey } from '../lib/server-only-keys.js';
 import { fetchChecked, serviceBase } from '../lib/ssrf-guard.js';
-import { homeServiceAllowed, SERVICE_OPT_IN } from '../lib/outbound-policy.js';
+import { addressErrorForClient, homeServiceAllowed, SERVICE_OPT_IN } from '../lib/outbound-policy.js';
 
 // Push services usually live on the home network, so that's allowed for an
 // admin (and other accounts when the owner opts them in,
@@ -172,7 +172,8 @@ async function _pushTestHandler(req, res) {
     try { await resp.body?.cancel(); } catch {}
     res.json({ ok: true });
   } catch (e) {
-    res.status(502).json({ error: `${svc}: ${e.message}` });
+    const shown = addressErrorForClient(req, e, 'could not reach the service', 'push-test') ?? e.message;
+    res.status(502).json({ error: `${svc}: ${shown}` });
   }
 }
 
