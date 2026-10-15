@@ -157,16 +157,19 @@ router.put('/:id', wrap(async (req, res) => {
 }));
 
 // ── POST /:id/used — bump usage_count + last_used_at on a saved meal ─────
+// Owner only. The counter and the time are the owner's own record of using the meal, so another
+// account (who can read a shared meal) never changes them, and a meal that is not the caller's is
+// a 404 whether it is shared, private or not there at all: a 403 for a private one and a 200 for a
+// shared one told anyone which meal ids exist and which are private.
 router.post('/:id/used', wrap((req, res) => {
   const u = uid(req);
-  const meal = db.prepare('SELECT * FROM meals WHERE id = ?').get(req.params.id);
+  const meal = db.prepare('SELECT id FROM meals WHERE id = ? AND user_id IS ?').get(req.params.id, u ?? null);
   if (!meal) return res.status(404).json({ error: 'Not found' });
-  if (u != null && meal.user_id !== u && meal.visibility === 'private') return res.status(403).json({ error: 'Forbidden' });
   const date = (req.body?.date && /^\d{4}-\d{2}-\d{2}$/.test(req.body.date))
     ? req.body.date
     : new Date().toISOString().slice(0, 10);
-  db.prepare(`UPDATE meals SET usage_count = usage_count + 1, last_used_at = MAX(COALESCE(last_used_at, ''), ?), updated_at = datetime('now') WHERE id = ?`)
-    .run(date, req.params.id);
+  db.prepare(`UPDATE meals SET usage_count = usage_count + 1, last_used_at = MAX(COALESCE(last_used_at, ''), ?), updated_at = datetime('now') WHERE id = ? AND user_id IS ?`)
+    .run(date, req.params.id, u ?? null);
   res.json({ ok: true });
 }));
 

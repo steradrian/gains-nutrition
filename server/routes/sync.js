@@ -325,7 +325,9 @@ router.post('/push', wrap(async (req, res) => {
         // the toggle a no-op for anything created offline first.
         // Sent before (the answer was lost): the row made then.
         const fKey = cleanCreateKey(f.client_key);
-        const fMade = findByCreateKey('foods', u, fKey);
+        // A deleted row counts as made: the row was deleted since the answer was lost, and a
+        // second one would bring it back (lib/create-keys.js).
+        const fMade = findByCreateKey('foods', u, fKey, { includeDeleted: true });
         if (fMade) { result.foods.push({ client_id: f.client_id, server_id: fMade.id }); continue; }
         const vis = resolveNewItemVisibility(u);
         const r = db.prepare(
@@ -376,7 +378,7 @@ router.post('/push', wrap(async (req, res) => {
         // Applies to both meals and recipes (is_recipe distinguishes them
         // but shares the same default).
         const mKey = cleanCreateKey(m.client_key);
-        const mMade = findByCreateKey('meals', u, mKey);
+        const mMade = findByCreateKey('meals', u, mKey, { includeDeleted: true });
         if (mMade) { result.meals.push({ client_id: m.client_id, server_id: mMade.id }); continue; }
         const vis = resolveNewItemVisibility(u);
         const r = db.prepare(
@@ -571,7 +573,7 @@ router.post('/push', wrap(async (req, res) => {
         }
       } else if (!a.deleted_at) {
         const aKey = cleanCreateKey(a.client_key);
-        const aMade = findByCreateKey('activity_log', u, aKey);
+        const aMade = findByCreateKey('activity_log', u, aKey, { includeDeleted: true });
         if (aMade) { result.activity.push({ client_id: a.client_id, server_id: aMade.id }); continue; }
         const r = db.prepare(
           `INSERT INTO activity_log (user_id, date, name, kcal, duration_min, distance, source, met, is_template, created_at, updated_at)
@@ -611,7 +613,7 @@ router.post('/push', wrap(async (req, res) => {
         }
       } else if (!f.deleted_at) {
         const fsKey = cleanCreateKey(f.client_key);
-        const fsMade = findByCreateKey('fasts', u, fsKey);
+        const fsMade = findByCreateKey('fasts', u, fsKey, { includeDeleted: true });
         if (fsMade) { result.fasts.push({ client_id: f.client_id, server_id: fsMade.id }); continue; }
         const r = db.prepare(
           `INSERT INTO fasts (user_id, start_at, end_at, goal_hours, notes, created_at, updated_at)

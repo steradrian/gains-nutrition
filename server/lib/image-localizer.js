@@ -10,6 +10,7 @@ import crypto from 'crypto';
 import { logger } from '../logger.js';
 import { detectImageTypeFromBuffer } from './image-magic.js';
 import { fetchChecked, readBody } from './ssrf-guard.js';
+import { userAgentFor } from './off-user-agent.js';
 
 const UPLOADS_DIR = process.env.UPLOADS_PATH || './uploads';
 // Cap on decoded data URL size. Mirrors the multer /api/upload limit so a
@@ -87,7 +88,8 @@ export async function localizeImage(img_url, opts = {}) {
     try {
       response = await fetchChecked(img_url, {
         signal: controller.signal,
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; NutriTrace/1.0)' },
+        // images.openfoodfacts.org and the like are told who is asking (lib/off-user-agent.js).
+        headers: { 'User-Agent': userAgentFor(img_url, 'Mozilla/5.0 (compatible; NutriTrace/1.0)') },
       }, guard);
       if (!response.ok) {
         logger.debug(`[image-localizer] Failed to download (${response.status}): ${img_url.substring(0, 80)}`);

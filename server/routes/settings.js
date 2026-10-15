@@ -3,6 +3,7 @@ import db from '../db.js';
 import { wrap } from '../logger.js';
 import { requireAuth, userMgmtActive } from '../middleware/auth.js';
 import { isServerOnlyKey } from '../lib/server-only-keys.js';
+import { cleanTextSetting } from '../lib/setting-text.js';
 import { fetchChecked, serviceBase } from '../lib/ssrf-guard.js';
 import { addressErrorForClient, homeServiceAllowed, SERVICE_OPT_IN } from '../lib/outbound-policy.js';
 
@@ -50,9 +51,12 @@ router.put('/', wrap((req, res) => {
   const { key, value } = req.body;
   if (!key) return res.status(400).json({ error: 'key required' });
   if (isServerOnlyKey(key)) return res.status(403).json({ error: 'forbidden key' });
+  // Names and labels lose their control characters (lib/setting-text.js); nothing else changes.
+  const text = cleanTextSetting(key, value);
+  if (text.error) return res.status(400).json({ error: text.error });
   db.prepare(`INSERT INTO user_settings (user_id, key, value, updated_at) VALUES (?, ?, ?, datetime('now'))
     ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = datetime('now'), deleted_at = NULL`)
-    .run(req.user.id, key, JSON.stringify(value));
+    .run(req.user.id, key, JSON.stringify(text.value));
   res.json({ ok: true });
 }));
 
@@ -70,10 +74,19 @@ router.put('/bulk', wrap((req, res) => {
     `INSERT INTO user_settings (user_id, key, value, updated_at) VALUES (?, ?, ?, datetime('now'))
      ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = datetime('now'), deleted_at = NULL`
   );
+  // Cleaned before anything is written, so a name that is only control characters refuses the
+  // whole request instead of leaving it half applied (lib/setting-text.js).
+  const entries = [];
+  for (const [key, value] of Object.entries(settings)) {
+    if (isServerOnlyKey(key)) { entries.push([key, undefined, true]); continue; }
+    const text = cleanTextSetting(key, value);
+    if (text.error) return res.status(400).json({ error: text.error });
+    entries.push([key, text.value, false]);
+  }
   let written = 0, skipped = 0;
   db.transaction(() => {
-    for (const [key, value] of Object.entries(settings)) {
-      if (isServerOnlyKey(key)) { skipped++; continue; }
+    for (const [key, value, serverOnly] of entries) {
+      if (serverOnly) { skipped++; continue; }
       upsert.run(req.user.id, key, JSON.stringify(value));
       written++;
     }
