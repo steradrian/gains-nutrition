@@ -79,8 +79,11 @@ actually serve is confusing UI.
 
 60 requests / minute per token by default (a batch counts one per
 item). Configurable via `API_RATE_LIMIT_PER_MIN` env var; a hub's sync
-token has its own, `HUB_SYNC_RATE_LIMIT_PER_MIN` (600). Limit headers
-returned on every response:
+token has its own, `HUB_SYNC_RATE_LIMIT_PER_MIN` (600). The hub's limit
+is never below 100, one full batch: a lower setting is raised to 100 (and
+logged at boot), because a limit under the batch size would answer every
+full batch with `400 batch_over_rate_limit`, which the hub cannot split
+and retries until it gives up. Limit headers returned on every response:
 
 ```
 X-RateLimit-Limit:     60

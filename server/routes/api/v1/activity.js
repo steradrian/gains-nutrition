@@ -52,13 +52,12 @@
 import { Router } from 'express';
 import db from '../../../db.js';
 import { wrap } from '../../../logger.js';
-import { chargeRateLimit, requireScope } from '../../../middleware/bearer-auth.js';
+import { BATCH_MAX_ITEMS, chargeRateLimit, requireScope } from '../../../middleware/bearer-auth.js';
 import { BRIDGE_SOURCE } from '../../../lib/active-calories.js';
 import { isCalendarDate } from '../../../lib/mcp/_util.js';
 
 const router = Router();
 
-export const BATCH_MAX_ITEMS = 100;
 const EXTERNAL_ID_MAX = 128;
 
 const _invalid = (code, error) => ({ invalid: { code, error } });

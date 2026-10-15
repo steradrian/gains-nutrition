@@ -14,7 +14,25 @@ const RATE_LIMIT_PER_MIN = Number(process.env.API_RATE_LIMIT_PER_MIN) || 60;
 // The hub's background sync backfills history in bursts (one request per
 // activity or measurement), so it gets its own bucket per user and a higher
 // ceiling than a hand-made API token.
-export const HUB_SYNC_RATE_LIMIT_PER_MIN = Number(process.env.HUB_SYNC_RATE_LIMIT_PER_MIN) || 600;
+//
+// The most items POST /api/v1/activity/batch takes. Each item costs one unit
+// of the limit, so a limit below this makes a full batch impossible: a
+// personal token's 400 batch_over_rate_limit is something its owner can fix
+// by sending smaller batches, but the hub's retry queue cannot split a
+// batch and would keep retrying it until it gave up. The hub's limit is
+// therefore never below one full batch.
+export const BATCH_MAX_ITEMS = 100;
+
+/** The hub sync limit for a configured value: unset or invalid is 600, and never below BATCH_MAX_ITEMS. */
+export function hubSyncRateLimit(configured) {
+  const n = Number(configured);
+  return Math.max(Number.isFinite(n) && n > 0 ? Math.floor(n) : 600, BATCH_MAX_ITEMS);
+}
+
+export const HUB_SYNC_RATE_LIMIT_PER_MIN = hubSyncRateLimit(process.env.HUB_SYNC_RATE_LIMIT_PER_MIN);
+if (Number(process.env.HUB_SYNC_RATE_LIMIT_PER_MIN) > 0 && Number(process.env.HUB_SYNC_RATE_LIMIT_PER_MIN) < BATCH_MAX_ITEMS) {
+  console.warn(`[bearer-auth] HUB_SYNC_RATE_LIMIT_PER_MIN=${process.env.HUB_SYNC_RATE_LIMIT_PER_MIN} is below one full batch; using ${BATCH_MAX_ITEMS}`);
+}
 const WINDOW_MS = 60 * 1000;
 
 // Per-token sliding-window counters. Cleared lazily on access.
