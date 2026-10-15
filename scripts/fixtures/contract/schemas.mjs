@@ -54,7 +54,8 @@ export const DIARY_DAY = {
 export const DIARY_INDEX_ITEM = {
   uuid: 'string', name: 'string', brand: 'string?', food_id: 'integer|null', meal: 'integer', kcal: 'integer', parts: optional(['string']),
 };
-export const DIARY_INDEX_LIVE_DAY = { date: 'date', rev: 'isotime', kcal: 'integer', items: [DIARY_INDEX_ITEM] };
+// truncated is only ever true: the day alone passed the page cap and its items were cut to fit.
+export const DIARY_INDEX_LIVE_DAY = { date: 'date', rev: 'isotime', kcal: 'integer', items: [DIARY_INDEX_ITEM], truncated: optional('boolean') };
 export const DIARY_INDEX_DELETED_DAY = { date: 'date', rev: 'isotime', deleted: 'boolean' };
 export const DIARY_INDEX_PAGE = {
   days: [oneOf(DIARY_INDEX_LIVE_DAY, DIARY_INDEX_DELETED_DAY)],

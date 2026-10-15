@@ -8,8 +8,12 @@ import { Nutrition } from '../../src/lib/nutrition.js';
 import { foodKey } from './diary-helpers.js';
 import { safeJson } from './mcp/_util.js';
 
-// A page stops after the day that takes its items past this many bytes.
+// A page's `days`, as JSON, is at most this many bytes: well under the hub's
+// 4 MiB cap on a response it forwards. A page stops before the day that would
+// pass it, and a day that is over it alone is trimmed (fitToBytes).
 export const INDEX_MAX_BYTES = 2 * 1024 * 1024;
+
+const jsonBytes = value => Buffer.byteLength(JSON.stringify(value));
 
 // Split recipes nest a few levels at most; deeper than this is not read.
 const PARTS_MAX_DEPTH = 6;
@@ -62,6 +66,23 @@ function indexItem(item) {
   return out;
 }
 
+// A day alone over the page cap keeps the items that fit, in order, and says
+// `truncated: true`. Its date, rev and kcal (the whole day's) still go out, so
+// the cursor moves past it instead of the page repeating for ever.
+function fitToBytes(day, maxBytes) {
+  if (jsonBytes(day) <= maxBytes) return day;
+  const shell = { ...day, items: [], truncated: true };
+  let room = maxBytes - jsonBytes(shell);
+  const items = [];
+  for (const item of day.items) {
+    const need = jsonBytes(item) + (items.length > 0 ? 1 : 0);
+    if (need > room) break;
+    room -= need;
+    items.push(item);
+  }
+  return { ...shell, items };
+}
+
 /** `row` is a diary row plus `changed` (lib/diary-keyset.js). */
 export function diaryIndexEntry(row) {
   // changed is SQLite's 'YYYY-MM-DD HH:MM:SS' in UTC; rev is the same instant as ISO seconds.
@@ -70,5 +91,6 @@ export function diaryIndexEntry(row) {
   const stored = safeJson(row.items, []);
   const items = (Array.isArray(stored) ? stored : []).filter(it => it && typeof it === 'object');
   const kcal = items.reduce((sum, it) => sum + kcalOf(it), 0);
-  return { date: row.date, rev, kcal: Math.round(kcal), items: items.map(indexItem) };
+  // 2 bytes of room for the [ ] around a page of one day.
+  return fitToBytes({ date: row.date, rev, kcal: Math.round(kcal), items: items.map(indexItem) }, INDEX_MAX_BYTES - 2);
 }

@@ -21,6 +21,7 @@ import { parseCronometer }  from '../lib/nutrition-import/cronometer.js';
 import { parseLoseit }      from '../lib/nutrition-import/loseit.js';
 import { parseMfp, pickMealCsv } from '../lib/nutrition-import/mfp.js';
 import { ensureUuids } from '../lib/diary-merge.js';
+import { admitDiaryDay, quarantinedDate } from '../lib/diary-quarantine.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -223,9 +224,15 @@ router.post('/commit', upload.single('file'), wrap((req, res) => {
 
   let imported = 0, skipped = 0, replaced = 0, merged = 0;
   const errors = [];
+  // Days under a date that does not exist: kept in diary_quarantine, not imported.
+  const quarantined = [];
 
   const tx = db.transaction(() => {
     for (const [date, items] of byDate.entries()) {
+      if (!admitDiaryDay(db, { userId, date, payload: { date, items }, source: 'nutrition-import' })) {
+        quarantined.push({ date: quarantinedDate(date) });
+        continue;
+      }
       const existing = userId == null
         ? db.prepare('SELECT * FROM diary WHERE date = ? AND user_id IS NULL AND deleted_at IS NULL').get(date)
         : db.prepare('SELECT * FROM diary WHERE date = ? AND user_id = ? AND deleted_at IS NULL').get(date, userId);
@@ -282,7 +289,7 @@ router.post('/commit', upload.single('file'), wrap((req, res) => {
   }
 
   logger.info(`[nutrition-import] user=${userId} source=${source} mode=${dupeMode} imported=${imported} skipped=${skipped} replaced=${replaced} merged=${merged}`);
-  res.json({ imported, skipped, replaced, merged, errors, totalItems: canonical.length });
+  res.json({ imported, skipped, replaced, merged, errors, quarantined_diary: quarantined, totalItems: canonical.length });
 }));
 
 export default router;

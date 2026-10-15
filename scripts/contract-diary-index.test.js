@@ -12,7 +12,8 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import test from 'node:test';
 import { Nutrition } from '../src/lib/nutrition.js';
-import { INDEX_DATE_GLOB, keysetSql } from '../server/lib/diary-keyset.js';
+import { ensureDiaryDateGuard } from '../server/lib/diary-quarantine.js';
+import { INDEX_DATE_VALID, keysetSql } from '../server/lib/diary-keyset.js';
 import { PARITY_DAY_KCAL, PARITY_ITEMS } from './fixtures/contract/diary-index-items.mjs';
 import { PASSWORD, startServer } from './fixtures/contract/server.mjs';
 import { DIARY_INDEX_PAGE } from './fixtures/contract/schemas.mjs';
@@ -58,6 +59,13 @@ const logged = (over = {}) => ({
 const seedDay = (userId, date, { items = [], updatedAt = '2025-03-10 12:00:00', deletedAt = null, rawItems } = {}) => db.prepare(
   'INSERT INTO diary (user_id, date, items, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?)'
 ).run(userId, date, rawItems ?? JSON.stringify(items), updatedAt, deletedAt);
+
+// The table refuses a date that does not exist (diary-quarantine.test.js). To
+// test the index against a row that got in anyway, the guard is off for the seed.
+function seedBadDays(seed) {
+  db.exec('DROP TRIGGER diary_date_is_real_insert');
+  try { seed(); } finally { ensureDiaryDateGuard(db); }
+}
 
 // Follow `next` until the cursor stops, like a client's first load.
 async function crawl(acct, limit) {
@@ -177,7 +185,7 @@ test('GET /api/diary/index is the index, not the day "index"', async () => {
   const a = await account();
   // A row dated "index" is what /:date would answer with if the route were
   // read as a date: its items and tombstones, not a page.
-  seedDay(a.id, 'index', { items: [logged({ uuid: 'shadow', name: 'Shadow of the route' })] });
+  seedBadDays(() => seedDay(a.id, 'index', { items: [logged({ uuid: 'shadow', name: 'Shadow of the route' })] }));
   seedDay(a.id, '2025-02-01');
   const r = await a.get();
   assert.equal(r.status, 200);
@@ -190,17 +198,23 @@ test('GET /api/diary/index is the index, not the day "index"', async () => {
   assert.ok('days' in asDate.body, 'and /index is still the page after /:date was used');
 });
 
-test('a row whose date is not YYYY-MM-DD is neither listed nor counted', async () => {
+test('a row whose date is not a real calendar date is neither listed nor counted', async () => {
   const a = await account();
   seedDay(a.id, '2025-03-01');
-  for (const [i, date] of ['not-a-date', '2025-3-1', '2025-03-01x', ' 2025-03-02', '20250302', '2025/03/02', ''].entries()) {
-    seedDay(a.id, date, { updatedAt: `2025-03-10 12:00:0${i}` });
-  }
-  seedDay(a.id, 'bad-deleted', { deletedAt: '2025-03-11 00:00:00' });
+  const bad = ['not-a-date', '2025-3-1', '2025-03-01x', ' 2025-03-02', '20250302', '2025/03/02', '',
+    '2026-02-30', '2025-02-29', '2025-04-31', '2025-06-31', '2025-13-01', '2025-00-10', '0000-00-00'];
+  seedBadDays(() => {
+    for (const [i, date] of bad.entries()) {
+      seedDay(a.id, date, { updatedAt: `2025-03-10 12:00:${String(i).padStart(2, '0')}` });
+    }
+    seedDay(a.id, 'bad-deleted', { deletedAt: '2025-03-11 00:00:00' });
+    seedDay(a.id, '2026-02-31', { deletedAt: '2025-03-11 00:00:00' });
+  });
+  seedDay(a.id, '2024-02-29', { updatedAt: '2025-03-10 12:30:00' });
   seedDay(a.id, '2025-03-05', { updatedAt: '2025-03-10 13:00:00' });
   const { days, pages } = await crawl(a, 2);
-  assert.deepEqual(days.map(d => d.date), ['2025-03-01', '2025-03-05']);
-  assert.ok(pages.every(p => p.total === 2), 'total leaves them out too');
+  assert.deepEqual(days.map(d => d.date), ['2025-03-01', '2024-02-29', '2025-03-05']);
+  assert.ok(pages.every(p => p.total === 3), 'total leaves them out too');
   assert.equal(pages.at(-1).has_more, false);
 });
 
@@ -236,22 +250,55 @@ test('a page stops after about 2 MB of days, says has_more, and the crawl still 
   assert.equal(first.status, 200);
   assert.ok(first.body.days.length >= 1 && first.body.days.length < 24, `cut at ${first.body.days.length} days`);
   assert.equal(first.body.has_more, true);
-  const bytes = JSON.stringify(first.body.days).length;
-  assert.ok(bytes > 2 * 1024 * 1024 && bytes < 2.5 * 1024 * 1024, `${bytes} bytes: past the cap by at most one day`);
+  const bytes = Buffer.byteLength(JSON.stringify(first.body.days));
+  assert.ok(bytes <= 2 * 1024 * 1024 && bytes > 2 * 1024 * 1024 - 300 * 1024, `${bytes} bytes: under the cap, short of it by less than one day`);
   assert.deepEqual(decodeCursor(first.body.next), { u: '2025-03-10 12:00:00', d: first.body.days.at(-1).date }, 'the cursor sits on the last day sent');
   const { days } = await crawl(a, 24);
   assert.deepEqual(days.map(d => d.date), Array.from({ length: 24 }, (_, i) => dateOf(i)));
 });
 
-test('one day over the cap still goes out whole', async () => {
+test('one day over the cap on its own is trimmed to fit, says truncated, and the cursor moves past it', async () => {
   const a = await account();
   const giant = Array.from({ length: 12_000 }, (_, i) => ({ uuid: `g-${i}`, name: 'y'.repeat(150), meal: 0, nutrition: { calories: 1 } }));
-  seedDay(a.id, '2025-06-01', { items: giant });
-  seedDay(a.id, '2025-06-02');
+  seedDay(a.id, '2025-06-01', { items: giant, updatedAt: '2025-06-10 12:00:00' });
+  seedDay(a.id, '2025-06-02', { items: giant, updatedAt: '2025-06-10 12:00:01' });
+  seedDay(a.id, '2025-06-03', { updatedAt: '2025-06-10 12:00:02' });
   const first = await a.get();
+  assert.equal(first.status, 200);
+  assertShape(first.body, DIARY_INDEX_PAGE);
   assert.deepEqual(first.body.days.map(d => d.date), ['2025-06-01']);
+  const [day] = first.body.days;
+  assert.equal(day.truncated, true);
+  assert.equal(day.rev, '2025-06-10T12:00:00Z', 'the rev goes out, so a client can tell the day changed');
+  assert.equal(day.kcal, 12_000, 'the day total is the whole day, not the items that fit');
+  assert.ok(day.items.length > 0 && day.items.length < giant.length, `${day.items.length} items kept`);
+  assert.deepEqual(day.items.map(i => i.uuid), giant.slice(0, day.items.length).map(i => i.uuid), 'the first items, in order');
+  const bytes = Buffer.byteLength(JSON.stringify(first.body.days));
+  assert.ok(bytes <= 2 * 1024 * 1024 && bytes > 2 * 1024 * 1024 - 1024, `${bytes} bytes: as many items as fit`);
   assert.equal(first.body.has_more, true);
-  assert.deepEqual((await a.get(`?since=${first.body.next}`)).body.days.map(d => d.date), ['2025-06-02']);
+  assert.deepEqual(decodeCursor(first.body.next), { u: '2025-06-10 12:00:00', d: '2025-06-01' });
+  const second = await a.get(`?since=${first.body.next}`);
+  assert.deepEqual(second.body.days.map(d => [d.date, d.truncated]), [['2025-06-02', true], ['2025-06-03', undefined]], 'the next call is past the trimmed day, and truncated is only ever true');
+  assert.ok(Buffer.byteLength(JSON.stringify(second.body.days)) <= 2 * 1024 * 1024);
+  assert.equal(second.body.has_more, false);
+  assert.ok(Buffer.byteLength(JSON.stringify(first.body)) < 2 * 1024 * 1024 + 1024, 'the answer is the days plus a small envelope, far under the hub\'s 4 MiB');
+});
+
+test('the cap counts bytes, not characters: days of multi-byte names fill the page by their UTF-8 size', async () => {
+  const a = await account();
+  // About 1.2 MB of UTF-8 per day, but only about 0.5 million characters.
+  const wide = Array.from({ length: 3_000 }, (_, i) => ({ uuid: `w-${i}`, name: '日'.repeat(100), meal: 0, nutrition: { calories: 1 } }));
+  const insert = db.transaction(() => { for (let i = 0; i < 4; i++) seedDay(a.id, dateOf(400 + i), { items: wide, updatedAt: '2025-07-10 12:00:00' }); });
+  insert();
+  const { days, pages } = await crawl(a, 10);
+  assert.deepEqual(days.map(d => d.date), Array.from({ length: 4 }, (_, i) => dateOf(400 + i)));
+  assert.ok(pages.every(p => p.days.length === 1), 'a second day would pass 2 MB of bytes');
+  for (const page of pages) {
+    const bytes = Buffer.byteLength(JSON.stringify(page.days));
+    assert.ok(bytes <= 2 * 1024 * 1024, `${bytes} bytes`);
+    assert.ok(JSON.stringify(page.days).length < bytes, 'and by characters it would have looked smaller');
+  }
+  assert.ok(days.every(d => d.truncated === undefined), 'a day that fits is not trimmed');
 });
 
 test('a removed item, a deleted day and a clear-all reach the next poll', async () => {
@@ -412,9 +459,9 @@ test('the handler reads stored JSON only, and its query runs on idx_diary_user_c
     assert.doesNotMatch(source, /\bJOIN\b/);
   }
 
-  assert.match(handler, /INDEX_DATE_GLOB/, 'the page and total both filter on the date shape');
+  assert.match(handler, /INDEX_DATE_VALID/, 'the page and total both filter on a real calendar date');
   const { pageSql, countSql, params } = keysetSql({
-    where: [INDEX_DATE_GLOB, 'user_id = ?'], params: [1], columns: 'date, items, deleted_at',
+    where: [INDEX_DATE_VALID, 'user_id = ?'], params: [1], columns: 'date, items, deleted_at',
     position: { u: '1970-01-01 00:00:00', d: '' },
   });
   for (const [sql, bound] of [[pageSql, [...params, 200]], [countSql, params]]) {
@@ -450,7 +497,7 @@ test('single-user mode: no sign-in, the one owner (user_id NULL) sees every day'
   assert.equal((await put('2026-10-12', { items: [] })).status, 200);
   assert.equal((await srv.api('DELETE', '/api/diary/2026-10-12', undefined, anon)).status, 200);
   assert.equal((await put('not-a-date', {})).status, 400);
-  seedDay(null, 'legacy-bad');
+  seedBadDays(() => seedDay(null, 'legacy-bad'));
 
   const r = await srv.api('GET', '/api/diary/index', undefined, anon);
   assert.equal(r.status, 200);

@@ -4,8 +4,8 @@ import { wrap } from '../logger.js';
 import { requireAuth, userMgmtActive } from '../middleware/auth.js';
 import { freshenItemImages, hydrateItems } from '../lib/diary-helpers.js';
 import { INDEX_MAX_BYTES, diaryIndexEntry } from '../lib/diary-index.js';
-import { isCalendarDate } from '../lib/mcp/_util.js';
-import { INDEX_DATE_GLOB, decodeCursor, encodeCursor, readKeysetPage } from '../lib/diary-keyset.js';
+import { admitDiaryDay } from '../lib/diary-quarantine.js';
+import { INDEX_DATE_VALID, decodeCursor, encodeCursor, readKeysetPage } from '../lib/diary-keyset.js';
 import { mergeEntries } from '../lib/diary-merge.js';
 import { dispatchWebhookEvent } from '../lib/webhooks.js';
 import { getGoalsCore } from '../lib/mcp/tools/goals.js';
@@ -20,8 +20,13 @@ router.use(requireAuth);
 const uid = req => userMgmtActive() ? req.user.id : null;
 
 // A day that does not exist (2026-02-30, "not-a-date") is never written: the
-// search index and the hub's filter can only carry real dates.
-const _badDate = res => res.status(400).json({ error: 'invalid date', code: 'bad_date' });
+// search index and the hub's filter can only carry real dates. What was sent
+// is kept in diary_quarantine and the answer is 400 bad_date.
+function _admitDate(req, res, date, source) {
+  if (admitDiaryDay(db, { userId: uid(req), date, payload: req.body, source })) return true;
+  res.status(400).json({ error: 'invalid date', code: 'bad_date' });
+  return false;
+}
 
 // ── Tombstone helpers ─────────────────────────────────────────────────────
 // diary_tombstones records per-uuid deletions for items and water. Clients
@@ -56,8 +61,9 @@ router.get('/', wrap((req, res) => {
 // keyset cursor on (updated_at, date) (lib/diary-keyset.js, the same one
 // GET /api/v1/body-stats polls with). Mounted before '/:date', or Express
 // would read "index" as a date. Same owner predicate as GET /api/diary, so
-// `total` is the length of that list, less any row whose date is not
-// YYYY-MM-DD shaped (INDEX_DATE_GLOB). See docs/api-contract.md, "Diary".
+// `total` is the length of that list, less any row whose date is not a real
+// calendar date (INDEX_DATE_VALID; none should exist, see
+// lib/diary-quarantine.js). See docs/api-contract.md, "Diary".
 const INDEX_DEFAULT_LIMIT = 200;
 const INDEX_MAX_LIMIT = 500;
 const INDEX_START = { u: '1970-01-01 00:00:00', d: '' };
@@ -74,7 +80,7 @@ router.get('/index', wrap((req, res) => {
   }
 
   const u = uid(req);
-  const where = u == null ? [INDEX_DATE_GLOB] : [INDEX_DATE_GLOB, 'user_id = ?'];
+  const where = u == null ? [INDEX_DATE_VALID] : [INDEX_DATE_VALID, 'user_id = ?'];
   const params = u == null ? [] : [u];
   const { built: days, next, hasMore } = readKeysetPage(db, {
     where, params, position, limit,
@@ -150,7 +156,7 @@ function _stripDataUrlImages(items) {
 // The whole write runs inside a single db.transaction so a crash mid-merge
 // leaves the row untouched.
 router.put('/:date', wrap((req, res) => {
-  if (!isCalendarDate(req.params.date)) return _badDate(res);
+  if (!_admitDate(req, res, req.params.date, 'diary-put')) return;
   const receivedAt = Date.now();
   const { body_stats, water, notes } = req.body;
   const items = _stripDataUrlImages(req.body.items);
@@ -318,7 +324,7 @@ router.put('/:date/completion', wrap((req, res) => {
   const receivedAt = Date.now();
   const u = uid(req);
   const date = String(req.params.date || '');
-  if (!isCalendarDate(date)) return _badDate(res);
+  if (!_admitDate(req, res, date, 'diary-completion')) return;
   const completed = req.body?.completed !== false;
 
   const existing = u == null
@@ -371,7 +377,7 @@ router.put('/:date/completion', wrap((req, res) => {
 router.put('/:date/meal-completion', wrap((req, res) => {
   const u = uid(req);
   const date = String(req.params.date || '');
-  if (!isCalendarDate(date)) return _badDate(res);
+  if (!_admitDate(req, res, date, 'diary-meal-completion')) return;
   const slot = Number(req.body?.slot);
   if (!Number.isInteger(slot) || slot < 0 || slot > 31) {
     return res.status(400).json({ error: 'slot must be an integer in [0, 31]' });

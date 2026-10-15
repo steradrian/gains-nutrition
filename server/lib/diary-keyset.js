@@ -17,10 +17,13 @@ import { isCalendarDate } from './mcp/_util.js';
 
 const SQL_TIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
-// A `where` condition for the search index: only rows whose date is
-// YYYY-MM-DD shaped. The hub drops any other from a page and a client can do
-// nothing with it, so it is left out of the page and of `total`.
-export const INDEX_DATE_GLOB = "date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'";
+// A `where` condition for the search index: only rows whose date is a real
+// calendar date, the shape (GLOB) and the day (date() rolls 2026-02-30 over
+// to 2026-03-02, so only a date it gives back unchanged exists). The hub
+// drops any other from a page and a client can do nothing with it, so it is
+// left out of the page and of `total`. No row should hold one any more
+// (lib/diary-quarantine.js keeps them out); this is the second line.
+export const INDEX_DATE_VALID = "date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND date(date) IS date";
 
 export const encodeCursor = ({ u, d }) => Buffer.from(JSON.stringify({ u, d })).toString('base64url');
 
@@ -64,9 +67,11 @@ export function keysetSql({ where, params, columns, position }) {
  *            within this second would answer the same rows.
  *
  * `build` and `maxBytes` cap a page by size: `build(row)` makes what the
- * caller sends for a row, and the page stops after the row that takes the
- * built values' JSON past `maxBytes` (a day always goes out whole, and
- * every page holds at least one). `built` is parallel to `rows`.
+ * caller sends for a row, and the page stops before the row that would take
+ * the built values, as a JSON array, past `maxBytes` UTF-8 bytes. Every page
+ * holds at least one row, so `build` must keep one value within `maxBytes`
+ * on its own (diary-index.js trims a day to fit), or a page is that one
+ * value's size. `built` is parallel to `rows`.
  */
 export function readKeysetPage(db, { where, params, columns, position, limit, build = null, maxBytes = Infinity }) {
   const { countSql, pageSql, params: bound } = keysetSql({ where, params, columns, position });
@@ -74,12 +79,12 @@ export function readKeysetPage(db, { where, params, columns, position, limit, bu
   let rows = db.prepare(pageSql).all(...bound, limit);
   const built = [];
   if (build) {
-    let bytes = 0;
+    let bytes = 2; // the [ and ]
     for (let i = 0; i < rows.length; i++) {
       const value = build(rows[i]);
+      bytes += Buffer.byteLength(JSON.stringify(value)) + (i > 0 ? 1 : 0);
+      if (i > 0 && bytes > maxBytes) { rows = rows.slice(0, i); break; }
       built.push(value);
-      bytes += JSON.stringify(value).length;
-      if (bytes > maxBytes) { rows = rows.slice(0, i + 1); break; }
     }
   }
   const now = db.prepare(`SELECT datetime('now') AS now`).get().now;

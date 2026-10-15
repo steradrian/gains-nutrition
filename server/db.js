@@ -4,6 +4,7 @@ import fs from 'fs';
 import { randomUUID } from 'crypto';
 import { foldText } from './lib/search-text.js';
 import { DIARY_CHANGED_SQL } from './lib/diary-changed.js';
+import { ensureDiaryDateGuard, quarantineBadDiaryRows } from './lib/diary-quarantine.js';
 
 const dbPath = process.env.DB_PATH || './nutritrace.db';
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -92,6 +93,22 @@ db.exec(`
     ON diary_tombstones(user_id, date);
   CREATE INDEX IF NOT EXISTS idx_diary_tombstones_deleted
     ON diary_tombstones(deleted_at);
+
+  -- Days that arrived under a date that does not exist (lib/diary-quarantine.js).
+  -- Kept whole, never indexed or synced. user_id has no foreign key on
+  -- purpose: a backup restore empties users, and must not take these with it.
+  -- Deleting an account purges its rows (NO_CASCADE_TABLES in
+  -- lib/claim-anonymous-data.js).
+  CREATE TABLE IF NOT EXISTS diary_quarantine (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER,
+    date       TEXT NOT NULL,
+    payload    TEXT NOT NULL,
+    source     TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_diary_quarantine_user
+    ON diary_quarantine(user_id, created_at);
 
   CREATE TABLE IF NOT EXISTS user_settings (
     user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1271,5 +1288,19 @@ try {
 } catch (e) {
   console.warn('[db] foods nutriment key canonicalization failed:', e?.message || e);
 }
+
+// ── Diary days under a date that does not exist ───────────────────────────
+// Last, after every migration that rebuilds or rewrites diary: move rows an
+// earlier version stored (2026-02-30, "garbage") into diary_quarantine, then
+// have the table itself refuse such a date from here on. Runs every boot;
+// with nothing to move it reads two columns and returns. A failed move rolls
+// back whole and the next boot retries; the guard only looks at new writes.
+try {
+  const moved = quarantineBadDiaryRows(db);
+  if (moved > 0) console.log(`[db] diary: moved ${moved} row(s) whose date is not a real calendar date into diary_quarantine`);
+} catch (e) {
+  console.warn('[db] diary date quarantine failed:', e?.message || e);
+}
+ensureDiaryDateGuard(db);
 
 export default db;

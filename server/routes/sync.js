@@ -19,7 +19,7 @@ import { localizeImage, isExternalUrl } from '../lib/image-localizer.js';
 import { mirrorWeightToBodyStats } from '../lib/wellness-mirror.js';
 import { cleanCreateKey, findByCreateKey, setCreateKey } from '../lib/create-keys.js';
 import { isIntegrationRow } from '../lib/active-calories.js';
-import { isCalendarDate } from '../lib/mcp/_util.js';
+import { admitDiaryDay, quarantinedDate } from '../lib/diary-quarantine.js';
 import { clientClock, parseUtc, pushWins as clockPushWins, editStamp, resolveNote } from '../lib/sync-clock.js';
 
 // #199 (@tellis82): the POST /api/foods and POST /api/meals routes
@@ -246,7 +246,7 @@ router.post('/push', wrap(async (req, res) => {
   const receivedAt = Date.now();
   const u = uid(req);
   const { foods = [], meals = [], diary = [], activity = [], fasts = [], wellness = [], settings = [], workouts = [] } = req.body;
-  const result = { foods: [], meals: [], diary: [], skipped_diary: [], activity: [], fasts: [], wellness: [], settings: [], workouts: [] };
+  const result = { foods: [], meals: [], diary: [], quarantined_diary: [], activity: [], fasts: [], wellness: [], settings: [], workouts: [] };
 
   // #199 (@tellis82): localize any inbound img_url data URLs to
   // /uploads/ files before the sync transaction. Direct POST /api/foods
@@ -402,16 +402,17 @@ router.post('/push', wrap(async (req, res) => {
     // incidents. body_stats keeps its ad-hoc empty-guard (issue #81);
     // day-level soft delete still uses whole-row deleted_at.
     //
-    // A day whose date is not a real YYYY-MM-DD is skipped, not stored, and
-    // not an error: failing the push would hold back every other record in
-    // the batch on each retry, since the phone resends the same batch until
-    // one succeeds. The phone marks the whole batch synced, so it does not
-    // resend the day; it keeps its local copy and the server never holds it.
-    // Named in `skipped_diary` for a client that wants to show it.
+    // A day whose date is not a real YYYY-MM-DD goes to diary_quarantine, not
+    // to the diary, and is not an error: failing the push would hold back
+    // every other record in the batch on each retry, since the phone resends
+    // the same batch until one succeeds. The phone marks the whole batch
+    // synced, so it does not resend the day; it keeps its local copy and the
+    // server keeps the quarantined one. Named in `quarantined_diary` for a
+    // client that wants to show it.
     for (const d of diary) {
-      if (!d.date) continue;
-      if (!isCalendarDate(d.date)) {
-        result.skipped_diary.push({ client_id: d.client_id, date: String(d.date).slice(0, 40) });
+      if (d.date == null) continue;
+      if (!admitDiaryDay(db, { userId: u, date: d.date, payload: d, source: 'sync-push' })) {
+        result.quarantined_diary.push({ client_id: d.client_id, date: quarantinedDate(d.date) });
         continue;
       }
       if (d.deleted_at) {
@@ -661,7 +662,8 @@ router.post('/push', wrap(async (req, res) => {
       // two identifiers separate here matches the diary route's own
       // "IS NULL vs = uid" convention.
       if (w.metric_type === 'weight_kg' && w.value != null) {
-        mirrorWeightToBodyStats(u, w.date, Number(w.value));
+        const mirrored = mirrorWeightToBodyStats(u, w.date, Number(w.value));
+        if (mirrored.quarantined) result.quarantined_diary.push({ date: quarantinedDate(w.date) });
       }
     }
 

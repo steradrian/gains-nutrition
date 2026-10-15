@@ -183,7 +183,7 @@ router.use('/uploads', express.static(uploadsPath, {
   setHeaders(res) { res.set('Cache-Control', 'public, max-age=3600'); res.set(UPLOAD_RESPONSE_HEADERS); }
 }));
 
-router.use(authenticate);   // attach req.user on every request
+router.use(authenticate);   // sets req.user (null without a session); refuses a bad hub token
 // Remember the address an admin uses, so emailed links (password reset,
 // invite, sharing) go there instead of to whatever Host a request claims.
 // Not a hub request: those arrive on the hub's internal address for us.
@@ -191,11 +191,14 @@ router.use((req, res, next) => {
   if (req.user?.role === 'admin' && req.authVia !== 'hub' && hasAdminRole(req)) rememberAdminOrigin(req);
   next();
 });
-// The proxy needs no sign-in (authenticate only attaches who it can; it never
-// refuses a request with no session), because Android WebView and old
-// <img src="/api/proxy?url=..."> diary images call it without a token. It sits
-// after authenticate so its rate limit is keyed per account when there is a
-// session (the hub's tokens, the app's) and per address only without one.
+// The proxy needs no sign-in, because Android WebView and old
+// <img src="/api/proxy?url=..."> diary images call it without a token.
+// authenticate attaches who it can, and passes a request with no session on
+// as anonymous. It does refuse a bad credential: an invalid hub token is a
+// 401, a full hub replay cache a 503, and a hub sync-scope token outside
+// /api/v1 a 401. The proxy sits after it so its rate limit is keyed per
+// account when there is a session (the hub's tokens, the app's) and per
+// address only without one.
 router.use('/api/proxy', proxyRoutes);
 router.use(csrfProtect);  // CSRF protection for cookie-based sessions
 // Optional body summaries are captured only from parsed, access-checked requests.
