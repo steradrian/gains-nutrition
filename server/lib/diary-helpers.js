@@ -129,7 +129,7 @@ const HYDRATE_FIELDS = ['nutrition_basis', 'alt_units', 'density_g_ml', 'categor
 // value null) is an item the phone logged before its food reached the
 // server: its id is the phone's own, not a server id, so it names no food
 // here. The phone fills food_server_id in once the food goes up.
-const _foodKey = it => (it.food_server_id === null ? null : (it.food_server_id ?? it.id));
+export const foodKey = it => (it.food_server_id === null ? null : (it.food_server_id ?? it.id));
 export function hydrateItems(items, userId = null) {
   if (!Array.isArray(items) || !items.length) return items;
   try {
@@ -137,7 +137,7 @@ export function hydrateItems(items, userId = null) {
     const foodIds = new Set();
     for (const it of items) {
       if (it && !it.is_recipe) {
-        const id = _foodKey(it);
+        const id = foodKey(it);
         if (typeof id === 'number') foodIds.add(id);
       }
     }
@@ -150,7 +150,7 @@ export function hydrateItems(items, userId = null) {
     const byId = new Map(rows.map(r => [r.id, r]));
     return items.map(it => {
       if (!it || it.is_recipe) return _hydrateSplitChildren(it, userId);
-      const id = _foodKey(it);
+      const id = foodKey(it);
       const src = typeof id === 'number' ? byId.get(id) : null;
       if (!src) return _hydrateSplitChildren(it, userId);
       const out = { ...it };

@@ -3,6 +3,8 @@ import db from '../db.js';
 import { wrap } from '../logger.js';
 import { requireAuth, userMgmtActive } from '../middleware/auth.js';
 import { freshenItemImages, hydrateItems } from '../lib/diary-helpers.js';
+import { diaryIndexEntry } from '../lib/diary-index.js';
+import { decodeCursor, encodeCursor, readKeysetPage } from '../lib/diary-keyset.js';
 import { mergeEntries } from '../lib/diary-merge.js';
 import { dispatchWebhookEvent } from '../lib/webhooks.js';
 import { getGoalsCore } from '../lib/mcp/tools/goals.js';
@@ -43,6 +45,36 @@ router.get('/', wrap((req, res) => {
     ? db.prepare('SELECT * FROM diary WHERE deleted_at IS NULL ORDER BY date ASC').all()
     : db.prepare('SELECT * FROM diary WHERE user_id = ? AND deleted_at IS NULL ORDER BY date ASC').all(u);
   res.json(rows.map(parse));
+}));
+
+// Search index of the signed-in person's days, in change order, paged by a
+// keyset cursor on (updated_at, date) (lib/diary-keyset.js, the same one
+// GET /api/v1/body-stats polls with). Mounted before '/:date', or Express
+// would read "index" as a date. Same owner predicate as GET /api/diary, so
+// `total` is the length of that list. See docs/api-contract.md, "Diary".
+const INDEX_DEFAULT_LIMIT = 200;
+const INDEX_MAX_LIMIT = 500;
+const INDEX_START = { u: '1970-01-01 00:00:00', d: '' };
+const _badIndex = (res, code, error) => res.status(400).json({ error, code });
+
+router.get('/index', wrap((req, res) => {
+  const position = req.query.since == null ? INDEX_START : decodeCursor(req.query.since);
+  if (!position) return _badIndex(res, 'bad_cursor', 'since must be the next of a previous response from this route');
+  const limit = req.query.limit == null ? INDEX_DEFAULT_LIMIT : Number(req.query.limit);
+  if (!Number.isInteger(limit) || limit < 1 || limit > INDEX_MAX_LIMIT) {
+    return _badIndex(res, 'bad_limit', `limit must be an integer 1..${INDEX_MAX_LIMIT}`);
+  }
+
+  const u = uid(req);
+  const where = u == null ? [] : ['user_id = ?'];
+  const params = u == null ? [] : [u];
+  const { rows, next, hasMore } = readKeysetPage(db, {
+    where, params, position, limit,
+    columns: 'date, items, deleted_at',
+  });
+  const live = ['deleted_at IS NULL', ...where].join(' AND ');
+  const total = db.prepare(`SELECT COUNT(*) AS n FROM diary WHERE ${live}`).get(...params).n;
+  res.json({ days: rows.map(diaryIndexEntry), total, next: encodeCursor(next), has_more: hasMore });
 }));
 
 // Get single date. Response includes tombstones so pulling clients can

@@ -83,6 +83,7 @@ notes and completion marks all live in that row.
 | Method and path | Request | Response |
 |---|---|---|
 | `GET /api/diary` | none | Every day with a row, `date` ascending, no paging (the whole history). The Statistics screen reads this. |
+| `GET /api/diary/index` | query `since` (the `next` of an earlier response; absent = start of history), `limit` 1..500, default 200 | A search index of the days, in change order: `{ days, total, next, has_more }`. See **Index** below. **400** `{ error, code: "bad_cursor" \| "bad_limit" }` |
 | `GET /api/diary/:date` | none | The day, plus `tombstones`. A day with no row: `{ date, items: [], body_stats: {}, water: [], notes: "", completed_at: null, completed_meals: [], tombstones: [] }` |
 | `PUT /api/diary/:date` | `{ items[], body_stats{}, water[], notes, deleted_uuids: { items: [uuid], water: [uuid] } }`, optional `notes_updated_at`, `client_now` (Android) | The day as stored, plus `tombstones` |
 | `PUT /api/diary/:date/completion` | `{ completed: boolean }` (anything but `false` counts as true) | `{ ok: true, date, completed_at }`. **400** `{ "error": "invalid date" }` unless `:date` is `YYYY-MM-DD` |
@@ -106,6 +107,30 @@ notes and completion marks all live in that row.
 | `notes_updated_at`, `completion_marked_at` | stamp or null |
 | `meal_marks_at` | JSON **string** or null |
 | `tombstones` | `[{ kind: "item" \| "water", uuid, deleted_at }]`, on the single-day GET and on PUT |
+
+**Index** (`GET /api/diary/index`, `server/lib/diary-index.js`). Each day is
+reduced to what a search on the device needs, read from the stored JSON only
+(no food or image lookups). The signed-in account's days only.
+
+| Field | Type |
+|---|---|
+| `days[]` live | `{ date, rev, kcal, items: [{ uuid, name, brand?, food_id, meal, kcal, parts? }] }` |
+| `days[]` deleted | `{ date, rev, deleted: true }`: remove the day |
+| `rev` | the row's last change, UTC whole seconds, `YYYY-MM-DDTHH:MM:SSZ`; compare as a string |
+| `kcal` | integer; the day's is the rounded sum of the unrounded item values |
+| item `brand` | left out when empty |
+| item `food_id` | the source food's id; `null` for a quick entry, a recipe or a phone-only food |
+| item `meal` | slot index into `mealNames` |
+| item `parts` | the ingredient names of a split recipe (`_splitItems`), left out otherwise |
+| `total` | live days this account has, the length of `GET /api/diary`; a lower count than the client holds means rows were removed outright (a restore): rebuild |
+| `next` | always set; pass as `since` to continue or to poll later |
+| `has_more` | another call returns more right now; false while the cursor cannot move |
+
+The cursor is a keyset position on `(updated_at, date)`, the same one
+`GET /api/v1/body-stats` polls with, so any number of rows sharing one second
+page through. It never moves into the current second, so rows from it come
+again on the next call: applying a day is idempotent. A removed item re-sends
+the whole day (no per-item tombstones on the wire).
 
 **Item.** Whatever the client wrote, plus:
 - `imgUrl` is always replaced with the source food's (or recipe's) current
