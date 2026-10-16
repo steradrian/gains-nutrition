@@ -1,246 +1,67 @@
-<h1 align="center">NutriTrace</h1>
+# Gains Nutrition
 
-<p align="center"><b>Trace Every Bite</b></p>
+The nutrition backend and web app inside [Gains](https://github.com/steradrian/gains), a PWA fitness app. It is a modified fork of NutriTrace (see [Credits](#credits)): a Node/Express server with a SQLite database, plus a Svelte PWA served by the same container.
 
-<p align="center">A self-hosted personal nutrition tracker.<br/>
-No accounts, no telemetry, no cloud sync unless you opt in.</p>
+In production it runs behind fitness-hub (`steradrian/gains-hub`), which signs users in and sends hub tokens to this server (see `HUB_JWKS` in [DEPLOY.md](DEPLOY.md)). It can also run on its own with local accounts.
 
-<p align="center">
-  <img src="public/icons/logo-transparent.png" alt="NutriTrace" width="180" />
-</p>
+![Diary view: a full day of food logging with macro bar, per-meal breakdowns, and water tracking](docs/screenshots/01-diary.png)
 
-<p align="center">
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-AGPL--3.0-blue"></a>
-  <a href="https://github.com/traceapps/nutritrace/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/traceapps/nutritrace?label=release&color=orange"></a>
-  <a href="https://github.com/traceapps/nutritrace/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/traceapps/nutritrace/total?label=downloads&color=brightgreen"></a>
-  <a href="https://github.com/traceapps/nutritrace/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/traceapps/nutritrace?style=social"></a>
-  <a href="https://traceapps.github.io/docs/getting-started/compose/"><img alt="Platform" src="https://img.shields.io/badge/platform-Web%20%7C%20Android%20%7C%20Docker-lightgrey"></a>
-  <br/>
-  <a href="https://traceapps.github.io/docs/nutritrace/"><img alt="Documentation" src="https://img.shields.io/badge/docs-traceapps.github.io-8A2BE2?logo=readthedocs&logoColor=white"></a>
-  <a href="https://github.com/traceapps/nutritrace/pkgs/container/nutritrace"><img alt="GHCR" src="https://img.shields.io/badge/ghcr.io-traceapps%2Fnutritrace-181717?logo=github&logoColor=white"></a>
-  <a href="https://hub.docker.com/r/traceapps/nutritrace"><img alt="Docker Hub pulls" src="https://img.shields.io/docker/pulls/traceapps/nutritrace?logo=docker&logoColor=white&label=docker%20pulls&color=2496ED"></a>
-  <a href="https://hosted.weblate.org/engage/nutritrace/"><img alt="Translation status" src="https://hosted.weblate.org/widget/nutritrace/svg-badge.svg"></a>
-</p>
+## What it does
 
-<p align="center">
-  <b>Coming to Apple devices:</b> the Trace apps have no iPhone app yet, because building and testing one needs a Mac and an iPhone.
-  <a href="https://ko-fi.com/traceapps">Chip in on Ko-fi</a>. Self-hosting stays free either way.
-</p>
+- Diary and meal logging with configurable meal slots, foods, meals and recipes.
+- Goals, including adaptive TDEE.
+- Open Food Facts lookups, optionally against a local Parquet mirror.
+- Wellness integrations (Fitbit, Withings, Garmin, Health Connect), activity and intermittent fasting.
+- AI assistant with a provider you configure, and an optional MCP endpoint.
+- Federation API (`/api/v1/*`) with scoped Bearer tokens, plus an optional public REST API and outgoing webhooks. Contracts are in [docs/](docs/).
+- Multi-user with OIDC SSO, or hub sign-in.
+- Offline mode in the browser: diary, own foods, settings and goals are kept on the device and sync when the connection returns.
 
----
+## Run locally
 
-**Jump to:** [What it is](#what-nutritrace-is) · [Features](#features) · [Install](#install) · [Env vars](#env-vars) · [Docs](https://traceapps.github.io/docs/nutritrace/)
-
----
-
-## What NutriTrace is
-
-NutriTrace runs as a single Docker container on your own hardware, with a PWA for the browser and a native Android app for your phone. No accounts on external services, no data leaving your network, no subscriptions.
-
-## Principles
-
-- **Self-hosting is and will remain free.** The server, PWA, and source code will never be paywalled.
-- **No trackers, no analytics, no telemetry.** NutriTrace doesn't phone home; your usage is invisible to anyone but you.
-- **Your data stays on your hardware.** No central server, no cloud sync that can read it; nothing leaves your network unless you opt into a third-party integration (OFF, USDA, Fitbit, etc.).
-- **Open source under AGPL-3.0.** Every line that touches your data is readable.
-
----
-
-![NutriTrace diary view: a full day of food logging with macro bar, per-meal breakdowns, and water tracking](docs/screenshots/01-diary.png)
-
----
-
-## Features
-
-- **Diary + meal logging.** Configurable meal slots, per-meal ⋮ menu, Split Recipe, IF tracker widget. [Full guide](https://traceapps.github.io/docs/nutritrace/diary/).
-- **Foods, meals, recipes.** Personal database, source filter chips, OFF + USDA quality signals (v1.0.3), Scan Label AI OCR. [Full guide](https://traceapps.github.io/docs/nutritrace/foods/).
-- **Goals + Adaptive TDEE.** Fixed/Dynamic/Adaptive modes, 7,700 kcal/kg regression math. [Full guide](https://traceapps.github.io/docs/nutritrace/goals/).
-- **Wellness integrations (4).** Fitbit (via Google Health), Withings, Garmin, Health Connect, plus Trace-computed Sleep/Readiness/Resilience scores. [Full guide](https://traceapps.github.io/docs/nutritrace/wellness/).
-- **Activity + Intermittent Fasting.** Manual workouts + IF widget with presets and streaks. [Full guide](https://traceapps.github.io/docs/nutritrace/activity-if/).
-- **Open Food Facts.** Cloud + local Parquet mirror for air-gap. [Full guide](https://traceapps.github.io/docs/nutritrace/off/).
-- **USDA + Mealie.** Free API key USDA lookups + Mealie recipe import. [Full guide](https://traceapps.github.io/docs/nutritrace/usda-mealie/).
-- **Trace AI.** Reads your diary, meals, wellness, fasting streaks, and Adaptive TDEE state; can log a food, propose one from a photo (you confirm), or add an activity entry, all conversationally. 16 tools total. Smart Log voice/text, propose_food photo flow. [Full guide](https://traceapps.github.io/docs/nutritrace/trace/).
-- **Federation API.** `/api/v1/*` scoped Bearer tokens for CT + LT + external clients. Your edit to an entry an integration made always wins: no later update from it writes over your change, though deleting the workout at the source still removes the entry. [Full guide](https://traceapps.github.io/docs/nutritrace/federation-api/), [contract](docs/federation.md).
-- **Model Context Protocol (MCP).** Expose your diary, goals, foods, steps and body composition to external AI agents (Claude Desktop, Cursor, Codex) via the standard MCP Streamable HTTP transport. 20 tools: 13 read tools, plus logging tools behind `MCP_WRITE_ENABLED=1` and the `mcp:write` scope, and delete, edit and create-food tools behind `MCP_DESTROY_ENABLED=1`, the `mcp:destroy` scope and a confirm on every call. Off by default; opt in with `MCP_ENABLED=1`. [Full guide](https://traceapps.github.io/docs/nutritrace/mcp/).
-- **Migrations.** MyFitnessPal (with nomad64 scraper), Lose It, Cronometer, Waistline. [Full guide](https://traceapps.github.io/docs/nutritrace/migrate-mfp/).
-- **Multi-user + OIDC SSO.** Authentik/Keycloak/Pocket ID/Authelia/Google/Auth0. [Full guide](https://traceapps.github.io/docs/auth/oidc/).
-- **Offline mode in the browser.** Your diary, your own foods, meals and recipes, manual activity, settings and goals, the fasting timer and your profile are kept in the browser, so the app opens without a connection and the day still adds up. Changes go up on their own when the connection returns. Open Food Facts, USDA, Mealie and CookTrace lookups, wellness providers, Trace and admin need a connection. Works on iPhone too. [What works offline](https://traceapps.github.io/docs/nutritrace/features/#offline).
-- **Native Android app.** Offline mode or server-sync, WorkManager native reminders. [Full guide](https://traceapps.github.io/docs/mobile/install/).
-- **Foldables (preliminary).** Half open like a book, Settings puts its section list on one side of the crease and the section on the other, the day's meals fall onto the two pages, and dialogs, sheets, pickers and Trace keep off the fold. Opened flat or on a tablet, the wider layouts turn on: Foods two cards across, side rails on Diary and Goals, and the food and meal editors side by side.
-
----
-
-## Apps
-
-- **Web (PWA).** Runs in any modern browser; add to home screen for full-screen use. Keeps working offline: your diary, foods and settings stay on the device and sync when the connection returns.
-- **Android.** Native Capacitor build; works standalone or connected to your NutriTrace server. Signed APK on the [Releases page](https://github.com/traceapps/nutritrace/releases/latest).
-- **iOS.** Not currently available (requires Mac + Apple Developer account; see [Support](#support)).
-
----
-
-## Install
-
-Published to two registries with identical tag sets: `ghcr.io/traceapps/nutritrace` (primary) and `traceapps/nutritrace` on [Docker Hub](https://hub.docker.com/r/traceapps/nutritrace) (mirror). The snippet below uses GHCR; swap in `traceapps/nutritrace:latest` if that suits your setup.
-
-**Unraid:** NutriTrace is in Community Applications. Search for NutriTrace in the Apps tab; the template sets the port, the appdata folders and the settings. Fill in JWT Secret before the first start.
-
-Minimum viable `docker-compose.yml`:
-
-```yaml
-services:
-  nutritrace:
-    image: ghcr.io/traceapps/nutritrace:latest
-    container_name: nutritrace
-    ports:
-      - "3001:3001"
-    volumes:
-      - ./data/db:/data/db
-      - ./data/uploads:/data/uploads
-    environment:
-      - DB_PATH=/data/db/nutritrace.db
-      - UPLOADS_PATH=/data/uploads
-      - JWT_SECRET=change-me-to-a-long-random-string
-      # OIDC_ISSUER=https://auth.example.com  # optional single-provider SSO
-    restart: unless-stopped
-```
-
-Generate a JWT secret:
+Requires Node 20 and npm 10.
 
 ```bash
-openssl rand -base64 48
+npm ci
+npm ci --prefix server
+npm run dev              # Vite dev server for the frontend
+npm start --prefix server   # API server on http://localhost:3001 (override with PORT)
 ```
 
-Start it:
+The Docker image builds the frontend and copies `dist/` into the server's `dist/`; the server serves the app from there. `DB_PATH` and `UPLOADS_PATH` default to paths in the working directory.
+
+To run the published image instead, see [DEPLOY.md](DEPLOY.md), which also documents the environment variables.
+
+## Tests
 
 ```bash
-docker compose up -d
+npm test            # node --test scripts/*.test.js
+npm run i18n:check
 ```
 
-Open `http://localhost:3001` and the first-run wizard will walk you through user management and creating your admin account. Skipping user management runs the app in single-user mode.
+## Docs
 
-Full compose recipes with SMTP, Docker secrets (`*_FILE`), reverse-proxy examples, and multi-provider OIDC at [docs/getting-started/compose/](https://traceapps.github.io/docs/getting-started/compose/). Tag policy (`:latest`, `:1`, `:1.0`, `:1.0.0`, `:dev`, legacy `:1.0.0-rc.N`) in [DEPLOY.md](DEPLOY.md).
-
-Pre-release testers can grab the rolling `dev-latest` APK; occasional milestone builds also get numbered `-devNN` pre-releases. See [DEPLOY.md](DEPLOY.md) for details.
-
----
-
-## Env vars
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `JWT_SECRET` | If using users |  | Signing key for auth tokens. Long random string. |
-| `DB_PATH` | Yes | `/data/db/nutritrace.db` | SQLite database file inside the container. |
-| `UPLOADS_PATH` | Yes | `/data/uploads` | Upload directory inside the container. |
-| `PORT` | No | `3001` | Container-side port the server listens on. |
-| `BASE_URL` | No |  | Subpath prefix when mounted behind a reverse proxy (e.g. `/nt`). |
-| `TRUST_PROXY` | Behind a reverse proxy | unset | Read the client address from `X-Forwarded-For`, so sign-in throttling counts each visitor rather than the proxy. Best as the proxies' addresses/subnets (`loopback, 172.16.0.0/12`); `1` (one proxy in front) or a hop count also work, but a count trusts whoever connects, so a client that reaches the port directly (or a count higher than the real number of proxies) lets it choose its own address. A count logs a warning at startup. Leave unset when the server is reached directly. |
-| `ALLOW_PRIVATE_SERVICE_URLS` | No | unset | `1` lets every account, not only admins, point Mealie, CookTrace and push notifications (Gotify, ntfy, Apprise) at addresses on the server's own network. A single-user install always may. |
-| `PUBLIC_URL` | No |  | The full address people open the app at, subpath included (e.g. `https://nutrition.example.com`). Links in emails (password reset, invites, sharing) use it. Unset, they use an address an admin has opened the app at. |
-| `LOG_LEVEL` | No | `info` | `error` \| `warn` \| `info` \| `debug` \| `trace`. |
-| `TRACE_REQUEST_BODIES` | No | unset | Set to `1` with trace logging to include redacted request bodies. |
-| `TRACE_REQUEST_PATHS` | No | `/api/diary,/api/sync/push` | Comma-separated body-trace path prefixes; `*` traces all and `none` traces no request bodies. |
-| `TRACE_BODY_MAX_BYTES` | No | `32768` | Maximum serialized bytes emitted for one traced request body. |
-| `INSECURE_COOKIES` | If on plain HTTP | unset | `1` drops the `Secure` cookie flag; needed only on plain-HTTP LAN. See [docs/getting-started/lan-http/](https://traceapps.github.io/docs/getting-started/lan-http/). |
-| `MAX_SESSION_HOURS` | No | `8760` (1 year) | Cap on the auth cookie lifetime. |
-| `RECOVERY_TOKEN` | No |  | Passphrase to disable user management from the login page (lockout recovery). |
-| `OFF_LOCAL_DB` | No |  | Path to an Open Food Facts Parquet snapshot (or legacy DuckDB file) for an air-gap mirror. |
-| `USDA_API_KEY` | No |  | Optional server-side USDA FoodData Central key (users can also enter their own in Settings). |
-| `MEALIE_URL` | No |  | Base URL of a Mealie instance for recipe import. |
-| `MEALIE_API_KEY` | No |  | Mealie API key. |
-| `AI_PROVIDER` | No |  | Lock Trace to a provider: `claude` \| `openai` \| `gemini` \| `oai-compat`. |
-| `OIDC_ISSUER` | No |  | Enable a single OIDC provider by setting `OIDC_ISSUER` + `OIDC_CLIENT_ID` + `OIDC_CLIENT_SECRET`. Numbered form (`OIDC_PROVIDER_2_*`) for multi-provider. |
-| `SMTP_HOST` | No |  | SMTP server for password reset & invites; also `SMTP_PORT` (587), `SMTP_SECURE` (false), `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`. |
-| `HUB_JWKS` | No | unset | Public keys (JWKS JSON, ES256) of a hub that signs in for its users with 60 s hub tokens. Set, there is no single-user mode and the first `/register` is not open. Unset, the hub path is off; if hub accounts already exist, the server logs an error and stays closed the same way (hub users cannot sign in until it is set again). Link an existing account with `node scripts/link-hub-user.js --user <username> --sub <hub id>` (`--claim-anonymous` adopts the single-user data, which is never handed out automatically behind a hub and until then is hidden from every account). Hub accounts get no local password, and usernames starting with `hub-` are reserved for them. Known limitation: an admin cannot ban a hub account here; deleting it only lasts until that person's next request, which makes a new, empty one. Remove them at the hub instead. |
-| `HUB_ISSUER` | With `HUB_JWKS` |  | The hub tokens' `iss`. |
-| `HUB_SYNC_RATE_LIMIT_PER_MIN` | No | `600` | Requests per minute per person for the hub's background sync on `/api/v1` (its own bucket, apart from API tokens). A batch of activities costs one per item, so values below `100` (one full batch) are raised to `100`; a lower limit would refuse every full batch for good. |
-
-Full list (Docker secrets `*_FILE` variants, air-gap `OFF_LOCAL_ONLY`, per-provider AI knobs, all `OIDC_*` options) at [docs/self-hosting/env-vars/](https://traceapps.github.io/docs/self-hosting/env-vars/). SMTP and AI can also be set in the Settings UI; env vars take priority and lock those fields.
-
-### Request logging
-
-API request logs include a client/server correlation ID, method, path, response status, duration, outcome, and observed wire-body bytes. Uploaded images and frontend assets are not request-logged. `Content-Length` is reported separately as an untrusted `declared_bytes` value and is never substituted for bytes actually observed. Oversized JSON requests return HTTP 413 with `request_id`, observed `size_bytes` (or `null`), `declared_bytes`, and `limit_bytes` fields.
-
-`LOG_LEVEL=trace` enables fine-grained internal trace calls, but request content remains off unless `TRACE_REQUEST_BODIES=1` is also set. Minimal byte counting happens before body-size enforcement; body inspection happens only after parsing and access checks. Selected request bodies, including sync pushes, use bounded traversal with credential and setting-value redaction, URL sanitization, inline `data:` URL summaries, and the `TRACE_BODY_MAX_BYTES` output cap. Query strings are omitted. Bodies can still contain private diary and health data; enable body tracing only temporarily and do not publish the resulting logs without reviewing them.
-
-The app sends `X-Request-ID` to the server and records the same ID in verbose client diagnostics. The server returns the ID on responses, so a failing app request can be matched directly to its server log. Invalid logging configuration fails at startup instead of silently falling back.
-
----
-
-## Data persistence
-
-Two host directories bind-mount:
-
-- **Database** (`DB_PATH`). SQLite file.
-- **Uploads** (`UPLOADS_PATH`). Food/meal photos and server-side backups (`uploads/backups/`).
-
-Nothing else needs to persist; the container is stateless beyond these two volumes.
-
-## Updating
-
-```bash
-docker compose pull
-docker compose up -d
-```
-
-The database schema migrates automatically on startup.
-
----
+- [DEPLOY.md](DEPLOY.md): image, compose, environment variables, reverse proxy, local OFF mirror
+- [ARCHITECTURE.md](ARCHITECTURE.md): how the app is put together
+- [PRIVACY.md](PRIVACY.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [CHANGELOG.md](CHANGELOG.md): history, including the upstream releases
 
 ## Tech stack
 
 | Layer | Technology |
 |---|---|
 | Frontend | Svelte 5 (compat mode), svelte-spa-router, Vite 6, PWA (service worker) |
-| Mobile | Capacitor 8 (Android), `@capacitor-community/sqlite`, ML Kit barcode, Health Connect |
+| Mobile shell | Capacitor 8 (Android) |
 | Backend | Node.js, Express 5, better-sqlite3, optional DuckDB for the local OFF mirror |
-| Auth | JWT (httpOnly cookie), bcryptjs, OpenID Connect 1.0 (PKCE + state + nonce) |
+| Auth | JWT (httpOnly cookie), bcryptjs, OpenID Connect (PKCE), hub tokens |
 
----
+## License
 
-## Trace family
-
-Part of the **TraceApps** family. Sister apps: [CookTrace](https://github.com/traceapps/cooktrace) for recipes and pantry, [LiftTrace](https://github.com/traceapps/lifttrace) for weightlifting, [NoteTrace](https://github.com/traceapps/notetrace) for notes, tasks and reminders. Docs for the family at [traceapps.github.io/docs](https://traceapps.github.io/docs/).
-
----
-
-## Translations
-
-NutriTrace is translated with [Weblate](https://weblate.org/), a free web platform for libre translation projects. No coding required — pick your language, translate the strings, submit. Missing keys fall back to English at runtime, so partial translations are safe to release.
-
-[![Translation status](https://hosted.weblate.org/widget/nutritrace/svg-badge.svg)](https://hosted.weblate.org/engage/nutritrace/)
-
-Start translating at [hosted.weblate.org/projects/nutritrace/](https://hosted.weblate.org/projects/nutritrace/). See [CONTRIBUTING.md](CONTRIBUTING.md#translations) for domain-specific guidance (regulatory nutrition terms, proper nouns, tone).
-
----
-
-## Roadmap, changelog, contributing, license
-
-- See [ROADMAP.md](ROADMAP.md) for what's next.
-- [CHANGELOG.md](CHANGELOG.md) tracks per-release changes.
-- Contributions welcome; see [CONTRIBUTING.md](CONTRIBUTING.md) for coding conventions, translation workflow, and the volunteer thread.
-- Licensed under [AGPL-3.0](LICENSE), entire codebase including the Android app source.
-
-## Support
-
-NutriTrace is free to self-host and always will be. No paid tier, nothing behind a donation, no telemetry. It's built and maintained by one person.
-
-**The current goal is a Mac and an iPhone.** None of the Trace apps run properly on an iPhone, because building and testing for iOS needs Apple hardware, plus the developer accounts for both app stores. That comes to about $1,300, and the itemised breakdown is on the [Support page](https://traceapps.github.io/docs/support/).
-
-Helping doesn't have to cost anything: starring the repo, reporting bugs with detail, and translating all count, and stars are how self-hosted projects get found.
-
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-Toward_a_Mac_and_iPhone-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/traceapps) [![GitHub Sponsors](https://img.shields.io/badge/GitHub_Sponsors-Sponsor_monthly-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/TraceApps?metadata_app=nutritrace&metadata_from=readme)
+[AGPL-3.0](LICENSE). Third-party licenses are listed in [LICENSES.md](LICENSES.md).
 
 ## Credits
 
-NutriTrace was inspired by two self-hosted nutrition trackers:
+Based on [NutriTrace](https://github.com/TraceApps/nutritrace) by TraceApps (AGPL-3.0), modified.
 
-- **[Waistline](https://github.com/davidhealey/waistline)** by David Healey. A privacy-focused Android nutrition diary that proved a great open-source nutrition tracker is possible.
-- **[SparkyFitness](https://github.com/CodeWithCJ/SparkyFitness)** by CodeWithCJ. A self-hosted fitness and nutrition tracker that influenced the wellness integrations and goal-tracking approach.
-
-## Disclaimer
-
-NutriTrace is not medical, health, or nutrition-professional software. It does not provide medical advice, diagnosis, treatment, or personalized nutrition prescriptions. Food entries, calorie and macro tracking, Trace AI suggestions, Smart Log parsing, Scan Label output, Goal Insights, Adaptive TDEE recommendations, wellness scores, and any analytical output are for informational and self-tracking purposes only.
-
-Nutrition decisions can interact with medical conditions (diabetes, eating disorders, food allergies, pregnancy, breastfeeding, pediatric needs, kidney or liver disease, metabolic disorders) in ways this app cannot assess. Consult a qualified healthcare professional, registered dietitian, or licensed nutritionist before starting a new eating plan, calorie target, or making significant dietary changes.
-
-Trace AI answers can be incorrect or incomplete; treat them as a starting point, not a substitute for human judgment or professional advice. Food nutrition data from Open Food Facts is community-curated and may contain inaccuracies. **Use at your own risk.**
+NutriTrace itself was inspired by [Waistline](https://github.com/davidhealey/waistline) by David Healey and [SparkyFitness](https://github.com/CodeWithCJ/SparkyFitness) by CodeWithCJ.

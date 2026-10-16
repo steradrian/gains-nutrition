@@ -1,11 +1,14 @@
-# NutriTrace — Deployment Guide
+# Gains Nutrition — Deployment Guide
+
+## Production
+
+Production is deployed by the deploy script in [steradrian/gains-hub](https://github.com/steradrian/gains-hub) (`deploy/`), which runs this image behind fitness-hub. Refer to that repo for the steps; this guide covers the image and its configuration.
 
 ## Quick Start
 
 ```bash
-# Clone and start
-git clone git@github.com:traceapps/nutritrace.git
-cd nutritrace
+git clone git@github.com:steradrian/gains-nutrition.git
+cd gains-nutrition
 cp .env.example .env          # edit as needed
 docker compose up -d
 ```
@@ -14,48 +17,18 @@ The app will be available at `http://localhost:3001`.
 
 ---
 
-## Image tags
+## Image
 
-Every release publishes a multi-arch (linux/amd64 + linux/arm64) image to
-**two registries** with an identical tag set. GHCR is primary; Docker Hub
-is a discoverability mirror. Both are first-class; pick whichever fits.
+The image is published to GHCR by `.github/workflows/publish-ghcr.yml` on every push to `main`. It is `linux/amd64` only; build locally for other architectures (Raspberry Pi, for example).
 
-- **`ghcr.io/traceapps/nutritrace`** (primary)
-- **`traceapps/nutritrace`** on [Docker Hub](https://hub.docker.com/r/traceapps/nutritrace) (mirror)
+- **`ghcr.io/steradrian/gains-nutrition`**
 
-Two tags are published (examples below use GHCR; swap the prefix for
-Docker Hub if preferred):
+| Tag | Updates when |
+|-----|--------------|
+| `:main` | Every push to `main` |
+| `:<commit SHA>` | Once per push to `main`; the full 40-character SHA, never moves |
 
-| Tag | Updates when | Use case |
-|-----|--------------|----------|
-| `ghcr.io/traceapps/nutritrace:latest` | Every stable release | Running the app |
-| `ghcr.io/traceapps/nutritrace:dev` | Every push to `dev` branch | Leading edge, not for production |
-
-There are no version-number tags (`:1`, `:1.4`, `:1.4.0`); the ones published
-for the first releases stopped updating and were retired. To hold a server on
-one exact build, pin it by digest
-(`ghcr.io/traceapps/nutritrace@sha256:...`; `docker inspect --format
-'{{index .RepoDigests 0}}' ghcr.io/traceapps/nutritrace:latest` prints the one you run).
-
----
-
-## Testing pre-release builds
-
-Two mechanisms cover pre-release testing between stable releases.
-
-### `dev-latest` (rolling, primary)
-
-Every dev-worthy build refreshes the [`dev-latest`](https://github.com/traceapps/nutritrace/releases/tag/dev-latest) GitHub pre-release. The APK is signed with the same keystore as stable releases, so it upgrades in place. Same guarantees as the Docker `:dev` tag, which auto-publishes on every push to `dev`. This is the default channel for testers who want "always the newest thing."
-
-### Milestone `v<version>-devNN` (occasional, pinnable)
-
-When a specific feature or fix is worth its own tester milestone (a new wearable integration, an Adaptive TDEE change, a big backup rework), a numbered pre-release gets cut: `v1.0.4-dev01`, `v1.1.0-dev01`, etc. These get their own permanent GH release, their own tester-facing notes, but no Docker tag of their own: the server side of a milestone is the `:dev` image. `dev-latest` is refreshed to point at the same commit.
-
-Iteration numbers are zero-padded two digits for 1 through 9 (`dev01`, `dev02`, …, `dev09`) and natural two digits from 10 onward (`dev10`, `dev11`, …). No dot between `dev` and the number. That keeps the identifier inside SemVer 2.0.0 §9 and gives correct lex ordering everywhere (GitHub Tags, `gh release list`). Historical tags `v1.1.0-dev.1` through `v1.1.0-dev.15` used the older dotted format; they sort correctly ahead of new no-dot tags so no retroactive rename was needed.
-
-Use numbered dev builds when reporting bugs ("I saw this on `v1.1.0-dev02`") or if you want to install a specific milestone and stay on it. Everyone else, `dev-latest` covers you.
-
-Both channels use the shared TraceApps keystore, so upgrading between them (or from either back to stable) works in place.
+`docker-compose.yml` uses `:main`. To hold a server on one exact build, pin the SHA tag.
 
 ---
 
@@ -66,7 +39,7 @@ A minimal working setup:
 ```yaml
 services:
   nutritrace:
-    image: ghcr.io/traceapps/nutritrace:latest
+    image: ghcr.io/steradrian/gains-nutrition:main
     ports:
       - "3001:3001"
     volumes:
@@ -84,7 +57,7 @@ services:
 ```yaml
 services:
   nutritrace:
-    image: ghcr.io/traceapps/nutritrace:latest
+    image: ghcr.io/steradrian/gains-nutrition:main
     ports:
       - "3001:3001"
     volumes:
@@ -104,8 +77,8 @@ services:
       SMTP_PASS: yourpassword
       SMTP_FROM: '"NutriTrace" <noreply@example.com>'
 
-      # Optional: session duration override (hours; 0 = never expires)
-      # SESSION_HOURS: 720
+      # Optional: cap on session length (hours)
+      # MAX_SESSION_HOURS: 720
 
       # Optional: backups directory (default: inside uploads volume)
       # BACKUPS_PATH: /data/backups
@@ -121,7 +94,7 @@ services:
 | `DB_PATH` | Yes | `./nutritrace.db` | Path to SQLite database file |
 | `UPLOADS_PATH` | Yes | `./uploads` | Path for uploaded food/meal images |
 | `OFF_USER_AGENT` | No | `Gains/0.1.0 (+https://github.com/steradrian/gains)` | The User-Agent the server sends to Open Food Facts (searches, product lookups and images through `/api/proxy`, food photos it saves, the local mirror's download). OFF asks for an app name, version and a way to reach you, e.g. `MyGains/1.0 (+https://github.com/you/your-gains)`. Printable ASCII only, 200 characters at most. Other hosts are not affected. |
-| `JWT_SECRET` | Yes (prod) | `dev-secret` | Secret for signing JWT auth tokens — **change this**. Server refuses to start in production with the dev default. |
+| `JWT_SECRET` | Yes (prod) | built-in dev value | Secret for signing JWT auth tokens — **change this**. Server refuses to start in production with the dev default. |
 | `TOKEN_ENC_KEY` | No | derived from `JWT_SECRET` | At-rest encryption key (AES-GCM, HKDF) for OIDC client secrets and wearable OAuth tokens. By default we derive a key from `JWT_SECRET`, which means rotating `JWT_SECRET` invalidates every stored secret too. Set `TOKEN_ENC_KEY` explicitly if you want to rotate session tokens without forcing users to re-authorize their wearables and re-enter OIDC client secrets. Use a long random string (e.g. `openssl rand -base64 48`). |
 | `PORT` | No | `3001` | Internal Express port (map to host in docker-compose) |
 | `LOG_LEVEL` | No | `info` | `error` \| `warn` \| `info` \| `debug` \| `trace`. Use `debug` for verbose wellness sync output. |
@@ -144,7 +117,7 @@ services:
 | `AI_MODEL` | No | provider default | Optional model override (e.g. `claude-haiku-4-5-20251001`, `llama3.1:8b`). Required when `AI_PROVIDER=oai-compat`. |
 | `AI_BASE_URL` | No | — | Required when `AI_PROVIDER=oai-compat`. Base URL of your OpenAI-compatible endpoint, e.g. `http://ollama:11434`. Reached from the server container, not the browser — Docker Compose sidecars on internal networks work. |
 | `AI_ENABLED` | No | — | If `true`, auto-enables the AI Assistant for all users. |
-| `MCP_ENABLED` | No | `0` | Set to `1` to expose the Model Context Protocol endpoint at `/api/mcp`. Off by default. See [the MCP setup guide](https://traceapps.github.io/docs/nutritrace/mcp/) for Claude Desktop / Cursor / Codex config. |
+| `MCP_ENABLED` | No | `0` | Set to `1` to expose the Model Context Protocol endpoint at `/api/mcp`. Off by default. |
 | `MCP_WRITE_ENABLED` | No | `0` | Set to `1` to allow MCP write tools (`log_food`, `log_water`, `log_meal`, `log_body_stat`) to be registered. Also requires the calling token to hold `mcp:write`. |
 | `MCP_DESTROY_ENABLED` | No | `0` | Set to `1` to allow MCP destructive tools (`delete_diary_entry`, `edit_diary_entry`, `create_food`). Also requires the token to hold `mcp:destroy` AND every call to include `confirm: true`. |
 | `ALLOWED_ORIGINS` | No | — | Comma-separated list of Origins that browser-based MCP clients may use. Server-to-server clients (no Origin header) always pass. Leave empty unless you're specifically using the MCP Inspector in a browser. `*` is refused (DNS-rebinding defense). |
@@ -153,6 +126,12 @@ services:
 | `WEBHOOKS_ENABLED` | No | `0` | Set to `1` to let configured outgoing webhooks actually fire. A webhook can be created in Settings before this is set; it just will not deliver until it is. |
 | `ALLOW_PRIVATE_IMAGE_URLS` | No | `0` | Set to `1` to let every account download a food, meal or profile photo given as a link from an address on your own network (private or loopback). Without it only an admin can; on a single-user install with no sign-in, only this variable allows it. Your saved CookTrace or Mealie address always works. Link-local and cloud-metadata addresses stay blocked either way. |
 | `ALLOW_PRIVATE_WEBHOOK_URLS` | No | `0` | Set to `1` to allow a webhook target on a private or loopback address (a same-Docker-network Home Assistant instance, for example). Off by default; public-internet-facing installs should leave this off. |
+| `ALLOW_PRIVATE_SERVICE_URLS` | No | unset | `1` lets every account, not only admins, point Mealie, CookTrace and push notifications (Gotify, ntfy, Apprise) at addresses on the server's own network. A single-user install always may. |
+| `TRUST_PROXY` | Behind a reverse proxy | unset | Read the client address from `X-Forwarded-For`, so sign-in throttling counts each visitor rather than the proxy. Best as the proxies' addresses/subnets (`loopback, 172.16.0.0/12`); `1` (one proxy in front) or a hop count also work, but a count trusts whoever connects, so a client that reaches the port directly (or a count higher than the real number of proxies) lets it choose its own address. A count logs a warning at startup. Leave unset when the server is reached directly. |
+| `BASE_URL` | No | unset | Subpath prefix when mounted behind a reverse proxy. See [Reverse Proxy with Subpath](#reverse-proxy-with-subpath). |
+| `HUB_JWKS` | No | unset | Public keys (JWKS JSON, ES256) of a hub that signs in for its users with 60 s hub tokens. Set, there is no single-user mode and the first `/register` is not open. Unset, the hub path is off; if hub accounts already exist, the server logs an error and stays closed the same way (hub users cannot sign in until it is set again). Link an existing account with `node scripts/link-hub-user.js --user <username> --sub <hub id>` (`--claim-anonymous` adopts the single-user data, which is never handed out automatically behind a hub and until then is hidden from every account). Hub accounts get no local password, and usernames starting with `hub-` are reserved for them. Known limitation: an admin cannot ban a hub account here; deleting it only lasts until that person's next request, which makes a new, empty one. Remove them at the hub instead. |
+| `HUB_ISSUER` | With `HUB_JWKS` | — | The hub tokens' `iss`. |
+| `HUB_SYNC_RATE_LIMIT_PER_MIN` | No | `600` | Requests per minute per person for the hub's background sync on `/api/v1` (its own bucket, apart from API tokens). A batch of activities costs one per item, so values below `100` (one full batch) are raised to `100`; a lower limit would refuse every full batch for good. |
 
 > **Note:** SMTP and AI settings can also be configured in **Settings → Email** / **Settings → AI Assistant** (admin only). Environment variables take priority over the UI and lock the corresponding fields when set.
 
@@ -338,7 +317,7 @@ If you connect the Android app to a server running at a subpath, enter the full 
 
 ## Connecting from Android
 
-The Android app ships with a strict network security policy on **release-signed APKs** (the ones distributed via Play Store / GitHub Releases): only HTTPS traffic is allowed to a user's NutriTrace server, to protect auth tokens on open WiFi. Debug-signed APKs (built locally) are unrestricted and can use plain HTTP.
+The Android app ships with a strict network security policy on **release-signed APKs** (the ones built for distribution): only HTTPS traffic is allowed to a user's NutriTrace server, to protect auth tokens on open WiFi. Debug-signed APKs (built locally) are unrestricted and can use plain HTTP.
 
 This only affects **server mode** — local-only Android users never hit this.
 
@@ -412,7 +391,7 @@ Example Compose snippet:
 ```yaml
 services:
   nutritrace:
-    image: ghcr.io/traceapps/nutritrace:latest
+    image: ghcr.io/steradrian/gains-nutrition:main
     environment:
       DB_PATH: /data/db/nutritrace.db
       UPLOADS_PATH: /data/uploads

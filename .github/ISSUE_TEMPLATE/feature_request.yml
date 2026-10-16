@@ -13,7 +13,7 @@ body:
   attributes:
     label: Before You Post
     options:
-    - label: I searched the open and closed [issues](https://github.com/steradrian/gains-nutrition/issues?q=is%3Aissue) and the [roadmap](https://github.com/steradrian/gains-nutrition/blob/main/ROADMAP.md), and nobody has asked for this yet.
+    - label: I searched the open and closed [issues](https://github.com/steradrian/gains-nutrition/issues?q=is%3Aissue), and nobody has asked for this yet.
       required: true
 - type: textarea
   id: problem

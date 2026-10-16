@@ -266,13 +266,12 @@ npx cap open android           # open Android Studio for signing and debug
 ```
 
 `android/keystore.properties` (gitignored) configures release
-signing. Debug and release builds sign with the shared TraceApps
-keystore so swapping between them doesn't trigger Android's
-signature-mismatch reinstall (which wipes the local SQLite DB).
+signing. Debug and release builds sign with the same keystore so
+swapping between them doesn't trigger Android's signature-mismatch
+reinstall (which wipes the local SQLite DB).
 
 ## Related Docs
 
-- [`ROADMAP.md`](ROADMAP.md), what's planned, what's released
 - [`CHANGELOG.md`](CHANGELOG.md), per-release notes
 - [`CONTRIBUTING.md`](CONTRIBUTING.md), how to open a PR
 - [`DEPLOY.md`](DEPLOY.md), full deployment guide
