@@ -35,6 +35,7 @@ import {
   syncDateGoogleHealth,
 } from '../lib/google-health.js';
 import { logger } from '../logger.js';
+import { cleanName } from '../lib/clean-text.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -515,7 +516,7 @@ export async function syncWorkouts(userId, from, to) {
         }
         const steps = parseInt(e.metricsSummary?.steps, 10) || null;
         const hasGps = e.exerciseMetadata?.hasGps ? 1 : 0;
-        upsert.run(userId, sourceId, dateStr, e.exerciseType || null, e.displayName || null,
+        upsert.run(userId, sourceId, dateStr, e.exerciseType || null, cleanName(e.displayName) || null,
           startTime, durationMs, distanceKm, calories, avgHr, maxHr, steps, hasGps);
         synced++;
       }

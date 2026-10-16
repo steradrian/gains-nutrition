@@ -4,7 +4,10 @@
  * not there. A 403 for another account's row (or a 200 for a shared one) told
  * anyone which ids exist and which are private.
  *
- *   GET    /api/meals/:id            POST /api/foods/:id/used   POST /api/meals/:id/used
+ *   GET    /api/foods/:id            GET    /api/meals/:id
+ *   POST   /api/foods/:id/used       POST   /api/meals/:id/used
+ *   PATCH  /api/foods/:id/share      PATCH  /api/meals/:id/share
+ *   POST   /api/foods/:id/copy       POST   /api/meals/:id/copy (a shared row is copyable; a private one is a 404)
  *   PUT    /api/foods/:id            DELETE /api/foods/:id
  *   PUT    /api/meals/:id            DELETE /api/meals/:id
  *   POST   /api/fasts/:id/end        PATCH  /api/fasts/:id      DELETE /api/fasts/:id
@@ -28,6 +31,9 @@ const skip = t => { if (!env) { t.skip('better-sqlite3 is not built for this Nod
 const { newUser, call } = env ?? {};
 
 const NOT_FOUND = { status: 404, body: { error: 'Not found' } };
+
+// Sharing is off on a new instance (lib/sharing.js); the share and copy routes answer 403 until it is on.
+const setSharing = on => db.prepare("INSERT INTO app_config (key, value) VALUES ('sharing_enabled', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(on));
 
 // 'group' is the visibility other accounts can read (lib/sharing.js).
 async function make(owner, route, name, visibility) {
@@ -97,6 +103,91 @@ for (const [route, table, edit] of [['/api/foods', 'foods', { name: 'Hijacked' }
     assert.equal(row(priv).name, 'Renamed');
     assert.equal((await call(owner, 'DELETE', `${route}/${priv}`)).status, 200);
     assert.notEqual(row(priv).deleted_at, null);
+  });
+}
+
+test('GET /api/foods/:id: the owner reads a live food; shared, private, deleted and missing are the same 404 for everyone else', async t => {
+  if (skip(t)) return;
+  const owner = newUser(), other = newUser();
+  const shared = await make(owner, '/api/foods', 'Shared oats', 'group');
+  const priv = await make(owner, '/api/foods', 'Private oats', 'private');
+  const gone = await make(owner, '/api/foods', 'Gone oats', 'group');
+  assert.equal((await call(owner, 'DELETE', `/api/foods/${gone}`)).status, 200);
+
+  assert.equal((await call(owner, 'GET', `/api/foods/${priv}`)).body.name, 'Private oats');
+  assert.equal((await call(owner, 'GET', `/api/foods/${shared}`)).body.name, 'Shared oats');
+  for (const id of [shared, priv, gone, 999999]) {
+    assert.deepEqual(await call(other, 'GET', `/api/foods/${id}`), NOT_FOUND, `food ${id} for another account`);
+  }
+  assert.deepEqual(await call(owner, 'GET', `/api/foods/${gone}`), NOT_FOUND, 'the owner\'s own deleted food');
+});
+
+test('GET /api/meals/:id and POST /:id/used: the owner\'s own deleted meal is a 404', async t => {
+  if (skip(t)) return;
+  const owner = newUser();
+  const id = await make(owner, '/api/meals', 'Gone bowl', 'private');
+  assert.equal((await call(owner, 'GET', `/api/meals/${id}`)).status, 200);
+  assert.equal((await call(owner, 'DELETE', `/api/meals/${id}`)).status, 200);
+  assert.deepEqual(await call(owner, 'GET', `/api/meals/${id}`), NOT_FOUND);
+  assert.deepEqual(await call(owner, 'POST', `/api/meals/${id}/used`, {}), NOT_FOUND);
+});
+
+test('POST /api/foods/:id/used: the owner\'s own deleted food is a 404', async t => {
+  if (skip(t)) return;
+  const owner = newUser();
+  const id = await make(owner, '/api/foods', 'Gone oats', 'private');
+  assert.equal((await call(owner, 'DELETE', `/api/foods/${id}`)).status, 200);
+  assert.deepEqual(await call(owner, 'POST', `/api/foods/${id}/used`, {}), NOT_FOUND);
+  assert.equal(db.prepare('SELECT usage_count FROM foods WHERE id = ?').get(id).usage_count, 0);
+});
+
+for (const [route, table] of [['/api/foods', 'foods'], ['/api/meals', 'meals']]) {
+  test(`PATCH ${route}/:id/share: another account's row, a deleted one and a missing one are the same 404`, async t => {
+    if (skip(t)) return;
+    setSharing(true);
+    const owner = newUser(), other = newUser();
+    const shared = await make(owner, route, 'Mine', 'group');
+    const priv = await make(owner, route, 'Mine too', 'private');
+    const gone = await make(owner, route, 'Gone', 'private');
+    assert.equal((await call(owner, 'DELETE', `${route}/${gone}`)).status, 200);
+    const visibility = id => db.prepare(`SELECT visibility FROM ${table} WHERE id = ?`).get(id).visibility;
+
+    for (const id of [shared, priv, 999999]) {
+      assert.deepEqual(await call(other, 'PATCH', `${route}/${id}/share`, { visibility: 'private' }), NOT_FOUND, `${id} for another account`);
+    }
+    assert.deepEqual(await call(owner, 'PATCH', `${route}/${gone}/share`, { visibility: 'group' }), NOT_FOUND, 'the owner\'s own deleted row');
+    assert.equal(visibility(shared), 'group', 'and nothing was changed');
+    assert.equal(visibility(gone), 'private');
+
+    assert.equal((await call(owner, 'PATCH', `${route}/${priv}/share`, { visibility: 'group' })).status, 200);
+    assert.equal(visibility(priv), 'group');
+  });
+
+  test(`POST ${route}/:id/copy: a shared row is copied; a private one, a deleted one and a missing one are the same 404`, async t => {
+    if (skip(t)) return;
+    setSharing(true);
+    const owner = newUser(), other = newUser();
+    const shared = await make(owner, route, 'Shared', 'group');
+    const priv = await make(owner, route, 'Private', 'private');
+    const gone = await make(owner, route, 'Gone', 'group');
+    assert.equal((await call(owner, 'DELETE', `${route}/${gone}`)).status, 200);
+
+    for (const id of [priv, gone, 999999]) {
+      assert.deepEqual(await call(other, 'POST', `${route}/${id}/copy`, {}), NOT_FOUND, `${id}`);
+    }
+    assert.deepEqual(await call(owner, 'POST', `${route}/${gone}/copy`, {}), NOT_FOUND, 'the owner\'s own deleted row');
+    assert.deepEqual(await call(owner, 'POST', `${route}/${shared}/copy`, {}), { status: 400, body: { error: 'Already yours' } });
+    assert.equal(db.prepare(`SELECT COUNT(*) n FROM ${table} WHERE user_id = ?`).get(other.id).n, 0, 'nothing was copied');
+
+    const copy = await call(other, 'POST', `${route}/${shared}/copy`, {});
+    assert.equal(copy.status, 201);
+    assert.equal(copy.body.name, 'Shared');
+    assert.equal((await call(other, 'POST', `${route}/${shared}/copy`, {})).body.id, copy.body.id, 'copied again: the same copy');
+
+    assert.equal((await call(other, 'DELETE', `${route}/${copy.body.id}`)).status, 200);
+    const fresh = await call(other, 'POST', `${route}/${shared}/copy`, {});
+    assert.equal(fresh.status, 201, 'a copy that was deleted is not handed back');
+    assert.notEqual(fresh.body.id, copy.body.id);
   });
 }
 

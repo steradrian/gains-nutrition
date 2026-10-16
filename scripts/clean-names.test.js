@@ -11,6 +11,7 @@
  *   sync       POST /api/sync/push: foods, meals, diary, activity, workouts, settings
  *   API        POST /api/v1/activity and /api/v1/workouts
  *   MCP        create_food, and the diary writer every logging tool goes through
+ *   wearables  the Fitbit and Google Health workout syncs (the provider's activity name)
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -69,6 +70,7 @@ const env = await bootInProcess({
     '/api/foods': 'foods.js', '/api/meals': 'meals.js', '/api/activity': 'activity.js', '/api/diary': 'diary.js',
     '/api/data': 'data.js', '/api/nutrition-import': 'nutrition-import.js', '/api/sync': 'sync.js',
     '/api/settings': 'settings.js', '/api/v1': 'api/v1/index.js',
+    '/api/fitbit': 'fitbit.js', '/api/google-health': 'google-health.js',
   },
 });
 const db = env?.db;
@@ -294,4 +296,52 @@ test('MCP create_food and the diary writer of the logging tools clean names', as
   mutateDiaryDay(u.id, '2026-10-19', day => ({ ...day, items: [...day.items, { name: 'Ba\u0000gel', brand: 'B\tr', nutrition: { calories: 1 } }] }));
   const [item] = diaryItems(u, '2026-10-19');
   assert.deepEqual([item.name, item.brand], ['Bagel', 'B r']);
+});
+
+// The wearables' workout sync: the provider's text is cleaned like any other writer's. The sync
+// functions are called directly with the provider's HTTP replaced; the reply is what the API sends.
+async function withProviderReplies(reply, run) {
+  const real = globalThis.fetch;
+  globalThis.fetch = async url => reply(String(url));
+  try { return await run(); } finally { globalThis.fetch = real; }
+}
+const json = body => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+const workoutNames = user => db.prepare('SELECT activity_name FROM workouts WHERE user_id = ? ORDER BY source_id').all(user.id).map(r => r.activity_name);
+
+test('the Fitbit workout sync cleans the activity name; one of only control characters is Unknown', async t => {
+  if (skip(t)) return;
+  const u = newUser();
+  const { encrypt } = await import('../server/lib/token-crypto.js');
+  db.prepare('INSERT INTO fitbit_tokens (user_id, access_token, refresh_token, expires_at) VALUES (?, ?, ?, ?)')
+    .run(u.id, encrypt('access'), encrypt('refresh'), new Date(Date.now() + 3600_000).toISOString());
+  const activity = (logId, activityName) => ({ logId, activityName, startDate: '2026-10-10', originalStartTime: `2026-10-10T0${logId}:00:00.000+00:00`, activeDuration: 600000, calories: 90, activityTypeId: 90009 });
+  const { syncWorkouts } = await import('../server/routes/fitbit.js');
+  await withProviderReplies(
+    url => json(url.includes('/activities/list.json')
+      ? { activities: [activity(1, DIRTY), activity(2, '\u0000\u0001'), activity(3, '🏃 Run')] }
+      : { 'activities-heart-intraday': { dataset: [] } }),
+    () => syncWorkouts(u.id, '2026-10-10', '2026-10-10'),
+  );
+  assert.deepEqual(workoutNames(u), [CLEAN, 'Unknown', '🏃 Run']);
+});
+
+test('the Google Health workout sync cleans the exercise name', async t => {
+  if (skip(t)) return;
+  const u = newUser();
+  const { encrypt } = await import('../server/lib/token-crypto.js');
+  db.prepare('INSERT INTO google_health_tokens (user_id, access_token, refresh_token, expires_at) VALUES (?, ?, ?, ?)')
+    .run(u.id, encrypt('access'), encrypt('refresh'), new Date(Date.now() + 3600_000).toISOString());
+  for (const key of ['google_health_client_id', 'google_health_client_secret']) {
+    db.prepare('INSERT INTO user_settings (user_id, key, value) VALUES (?, ?, ?)').run(u.id, key, JSON.stringify('x'));
+  }
+  const exercise = (id, displayName) => ({
+    name: `users/me/dataTypes/exercise/dataPoints/${id}`,
+    exercise: { displayName, exerciseType: 'RUNNING', activeDuration: '600s', interval: { startTime: '2026-10-10T07:00:00+00:00', endTime: '2026-10-10T07:10:00+00:00' }, metricsSummary: {} },
+  });
+  const { syncWorkouts } = await import('../server/routes/google-health.js');
+  await withProviderReplies(
+    url => json(url.includes('dataPoints:rollUp') ? {} : { dataPoints: [exercise('a', DIRTY), exercise('b', '\u0000'), exercise('c', '🏃 Run')] }),
+    () => syncWorkouts(u.id, '2026-10-10', '2026-10-10'),
+  );
+  assert.deepEqual(workoutNames(u), [CLEAN, null, '🏃 Run']);
 });

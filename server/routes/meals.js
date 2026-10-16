@@ -51,13 +51,14 @@ router.get('/', wrap((req, res) => {
 }));
 
 // ── GET /:id ──────────────────────────────────────────────────────────────
-// The caller's own meal. Another account's, shared or private, is a 404 like one that is not there:
-// a 403 for a private meal and a 200 for a shared one told anyone which meal ids exist and which
-// are private (the shared ones are listed with ?group=1, where sharing is meant to show them).
+// The caller's own live meal. Another account's, shared or private, a deleted one and one that is
+// not there are the same 404: a 403 for a private meal and a 200 for a shared one told anyone
+// which meal ids exist and which are private (the shared ones are listed with ?group=1, where
+// sharing is meant to show them).
 router.get('/:id', wrap((req, res) => {
   const u = uid(req);
   const row = db.prepare('SELECT * FROM meals WHERE id = ?').get(req.params.id);
-  if (!row || (u != null && row.user_id !== u)) return res.status(404).json({ error: 'Not found' });
+  if (!row || row.deleted_at || (u != null && row.user_id !== u)) return res.status(404).json({ error: 'Not found' });
   if (u != null && row.visibility === 'specific') {
     row._specific_users = db.prepare('SELECT user_id FROM meal_shares WHERE meal_id = ?').all(row.id).map(r => r.user_id);
   }
@@ -95,6 +96,11 @@ router.post('/', wrap(async (req, res) => {
     ? (img_url.startsWith('http') || img_url.startsWith('data:'))
     : isExternalUrl(img_url));
   const localImg = _shouldLocalizeImg ? await localizeImage(img_url, { trustedOrigins: _trustedImgOrigins, allowPrivate: ownerOrOptIn(req, 'ALLOW_PRIVATE_IMAGE_URLS') }) : (img_url || null);
+  // The stamp lookup below and the INSERT have no await between them, so the stamp cannot race.
+  // The key is looked up again here for the same reason as in POST /api/foods: the same create
+  // can land while the image downloads, and the first one stands.
+  const keyedNow = findByCreateKey('meals', u, createKey);
+  if (keyedNow) return res.status(200).json(parse(keyedNow));
   const warningsCol = Array.isArray(import_warnings) && import_warnings.length
     ? JSON.stringify(import_warnings.map(w => String(w || '').slice(0, 400)).filter(Boolean).slice(0, 20))
     : null;
@@ -173,7 +179,7 @@ router.put('/:id', wrap(async (req, res) => {
 // shared one told anyone which meal ids exist and which are private.
 router.post('/:id/used', wrap((req, res) => {
   const u = uid(req);
-  const meal = db.prepare('SELECT id FROM meals WHERE id = ? AND user_id IS ?').get(req.params.id, u ?? null);
+  const meal = db.prepare('SELECT id FROM meals WHERE id = ? AND user_id IS ? AND deleted_at IS NULL').get(req.params.id, u ?? null);
   if (!meal) return res.status(404).json({ error: 'Not found' });
   const date = (req.body?.date && /^\d{4}-\d{2}-\d{2}$/.test(req.body.date))
     ? req.body.date
@@ -198,8 +204,8 @@ router.patch('/:id/share', wrap((req, res) => {
   const u = uid(req);
   if (!sharingEnabled()) return res.status(403).json({ error: 'Sharing is not enabled on this instance.' });
   const meal = db.prepare('SELECT * FROM meals WHERE id = ?').get(req.params.id);
-  if (!meal) return res.status(404).json({ error: 'Not found' });
-  if (u != null && meal.user_id !== u) return res.status(403).json({ error: 'Forbidden' });
+  // Not the caller's, deleted or not there: one 404 (see GET /:id).
+  if (!meal || meal.deleted_at || (u != null && meal.user_id !== u)) return res.status(404).json({ error: 'Not found' });
 
   const { visibility, user_ids } = req.body;
   if (!['private', 'group', 'specific'].includes(visibility)) {
@@ -258,13 +264,14 @@ router.post('/:id/copy', wrap((req, res) => {
   const u = uid(req);
   if (!sharingEnabled()) return res.status(403).json({ error: 'Sharing is not enabled on this instance.' });
   const meal = db.prepare('SELECT * FROM meals WHERE id = ?').get(req.params.id);
-  if (!meal) return res.status(404).json({ error: 'Not found' });
+  // A meal the caller cannot read (private to someone else), a deleted one and one that is not
+  // there are the same 404; only a shared one (listed with ?group=1) can be copied.
+  if (!meal || meal.deleted_at || (u != null && meal.user_id !== u && !canRead(meal, u))) return res.status(404).json({ error: 'Not found' });
   if (u != null && meal.user_id === u) return res.status(400).json({ error: 'Already yours' });
-  if (u != null && !canRead(meal, u)) return res.status(403).json({ error: 'Forbidden' });
 
-  // Already copied?
+  // Already copied? (a copy that was deleted since is not one)
   if (u != null) {
-    const existing = db.prepare('SELECT id FROM meals WHERE user_id = ? AND source_id = ?').get(u, meal.id);
+    const existing = db.prepare('SELECT id FROM meals WHERE user_id = ? AND source_id = ? AND deleted_at IS NULL').get(u, meal.id);
     if (existing) return res.json(parse(db.prepare('SELECT * FROM meals WHERE id = ?').get(existing.id)));
   }
 

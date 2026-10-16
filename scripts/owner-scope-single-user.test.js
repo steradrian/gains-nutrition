@@ -7,9 +7,16 @@
  * is not there is a 404, the same answer. GET /api/meals/:id, the edits and the
  * fasts read and change the instance's rows as they always did.
  *
+ * The unique index on the source stamp does not apply to rows with no user
+ * (SQLite counts NULLs as different), so the route's lookup alone keeps a stamp
+ * to one row there, also when the same create is sent several times at once
+ * (create-race.test.js has the account case).
+ *
  * Its own file: a database is in single-user mode only while it has no user.
  */
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
 import test from 'node:test';
 import { bootInProcess } from './fixtures/in-process-server.mjs';
 
@@ -90,15 +97,52 @@ test('single-user mode: a fast is ended, edited and deleted, and a missing one i
   assert.deepEqual(await call(null, 'DELETE', '/api/fasts/999999'), { status: 404, body: { error: 'Fast not found' } });
 });
 
-test('single-user mode: a source stamp saved again after a delete makes a new row', async t => {
+// The unique index on the source stamp counts NULL owners as all different, so for the rows of
+// single-user mode it guards nothing: the route's own lookup (which leaves deleted rows out) is
+// what makes a stamp saved twice one row, and a delete free it. The tests below hold the lookup.
+test('single-user mode: the stamp index does not apply to rows with no user', t => {
   if (skip(t)) return;
-  for (const [route, body] of [['/api/foods', { name: 'Pantry', nutrition: { calories: 1 } }], ['/api/meals', { name: 'Recipe', items: [], nutrition: {} }]]) {
-    const send = () => call(null, 'POST', route, { ...body, client_key: 'k', source_app: 'cooktrace', source_external_id: 'e1' });
+  for (const table of ['foods', 'meals']) {
+    const add = () => db.prepare(`INSERT INTO ${table} (user_id, name, source_app, source_external_id) VALUES (NULL, 'x', 'cooktrace', 'raw')`).run();
+    add();
+    assert.doesNotThrow(add, `${table}: two live rows with no user and one stamp are both accepted`);
+  }
+});
+
+for (const [route, body] of [['/api/foods', { name: 'Pantry', nutrition: { calories: 1 } }], ['/api/meals', { name: 'Recipe', items: [], nutrition: {} }]]) {
+  test(`single-user mode: ${route} with one source stamp is updated in place, and saved again after a delete makes a new row`, async t => {
+    if (skip(t)) return;
+    const send = () => call(null, 'POST', route, { ...body, source_app: 'cooktrace', source_external_id: 'e1' });
     const first = await send();
     assert.equal(first.status, 201);
+    const again = await send();
+    assert.equal(again.status, 200);
+    assert.equal(again.body.id, first.body.id, 'a live row with the stamp is found, not duplicated');
+
     assert.equal((await call(null, 'DELETE', `${route}/${first.body.id}`)).status, 200);
     const fresh = await send();
-    assert.equal(fresh.status, 201, route);
+    assert.equal(fresh.status, 201, 'the deleted row does not answer for the stamp');
     assert.notEqual(fresh.body.id, first.body.id);
+    assert.equal((await send()).body.id, fresh.body.id, 'and the live one is what the stamp finds now');
+  });
+}
+
+test('single-user mode: the same food with a source stamp, sent at once, is one food', async t => {
+  if (skip(t)) return;
+  const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(256, 7)]);
+  const images = createServer((req, res) => setTimeout(() => { res.writeHead(200, { 'content-type': 'image/png' }); res.end(PNG); }, 200));
+  images.listen(0, '127.0.0.1');
+  await once(images, 'listening');
+  // The image is on the loopback, which the SSRF guard refuses unless the variable allows it (single-user mode has no admin).
+  process.env.ALLOW_PRIVATE_IMAGE_URLS = '1';
+  try {
+    const body = { name: 'Raced pantry', nutrition: { calories: 1 }, img_url: `http://127.0.0.1:${images.address().port}/p.png`, source_app: 'cooktrace', source_external_id: 'raced' };
+    const replies = await Promise.all(Array.from({ length: 4 }, () => call(null, 'POST', '/api/foods', body)));
+    assert.deepEqual(replies.map(r => r.status).sort(), [200, 200, 200, 201]);
+    assert.equal(new Set(replies.map(r => r.body.id)).size, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM foods WHERE source_external_id = 'raced'").get().n, 1);
+  } finally {
+    delete process.env.ALLOW_PRIVATE_IMAGE_URLS;
+    images.close();
   }
 });

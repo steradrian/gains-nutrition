@@ -112,10 +112,7 @@ test('DELETE /api/foods/:id is a soft delete: gone from the list', async () => {
   assertShape(again.body, ERROR);
 });
 
-// Found while writing the contract: GET /api/foods/:id has no deleted_at
-// filter (routes/foods.js), so a deleted food still answers 200 with
-// deleted_at set. A client reading it by id has to check deleted_at.
-test('GET /api/foods/:id of a deleted food is 404', { todo: 'routes/foods.js GET /:id returns soft-deleted rows' }, async () => {
+test('GET /api/foods/:id of a deleted food is 404', async () => {
   const made = await srv.api('POST', '/api/foods', { name: 'Deleted, then read' });
   await srv.api('DELETE', `/api/foods/${made.body.id}`);
   assert.equal((await srv.api('GET', `/api/foods/${made.body.id}`)).status, 404);

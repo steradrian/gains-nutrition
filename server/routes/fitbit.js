@@ -3,6 +3,7 @@ import { createHash, randomBytes } from 'crypto';
 import db from '../db.js';
 import { wrap, logger } from '../logger.js';
 import { requireAuth, userMgmtActive } from '../middleware/auth.js';
+import { cleanName } from '../lib/clean-text.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -792,7 +793,8 @@ async function _syncWorkouts(userId, from, to) {
     for (const a of activities) {
       const logId = a._exactLogId || String(a.logId);
       const date = a.startDate || a.originalStartTime?.slice(0, 10) || '';
-      const activityName = a.activityName || a.name || 'Unknown';
+      // The provider's text is cleaned like every other writer's (lib/clean-text.js).
+      const activityName = cleanName(a.activityName || a.name || '') || 'Unknown';
       const activityType = (a.activityTypeId || '').toString();
       const startTime = a.originalStartTime || a.startTime || '';
       const durationMs = a.activeDuration || a.duration || 0;
