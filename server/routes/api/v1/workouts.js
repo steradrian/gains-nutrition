@@ -37,6 +37,7 @@ import { Router } from 'express';
 import db from '../../../db.js';
 import { wrap } from '../../../logger.js';
 import { requireScope } from '../../../middleware/bearer-auth.js';
+import { cleanText } from '../../../lib/clean-text.js';
 
 const router = Router();
 
@@ -67,7 +68,7 @@ router.post('/', requireScope('write:workouts'), wrap((req, res) => {
   const startTime = start_time ? String(start_time).slice(0, 64) : null;
 
   const userId = req.apiUser.id;
-  const activityName = String(name || 'Workout').slice(0, 128);
+  const activityName = cleanText(String(name || 'Workout')).slice(0, 128) || 'Workout';
 
   // ── Upsert into workouts table ────────────────────────────────────────
   // UNIQUE(user_id, source, source_id) means re-posting the same

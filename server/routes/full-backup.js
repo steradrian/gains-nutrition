@@ -12,6 +12,8 @@ import { seedAiFromEnv } from '../ai.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
 import { restorableUpdatedAt } from '../lib/diary-changed.js';
 import { ADMIT, admitDiaryDay, quarantinedDate } from '../lib/diary-quarantine.js';
+import { cleanFields, cleanItemsJson } from '../lib/clean-text.js';
+import { cleanStoredTextSetting } from '../lib/setting-text.js';
 
 const router = express.Router();
 router.use(requireAuth);
@@ -238,7 +240,8 @@ function restoreFromZip(zip) {
     // A backup's updated_at that is not a time (a literal 'now', '') is
     // restored as the restore's own time, like a missing one: 'now' stored
     // as text makes SQLite throw inside idx_diary_user_changed.
-    for (const f of data.foods || []) insFood.run({ visibility: 'private', source_id: null, favorite: 0, usage_count: 0, last_used_at: null, nutrition_basis: null, alt_units: null, density_g_ml: null, source_app: null, source_external_id: null, source_url: null, deleted_at: null, ...f, updated_at: restorableUpdatedAt(f.updated_at) });
+    // Names lose their control characters on the way in, as on every write path (lib/clean-text.js).
+    for (const f of data.foods || []) insFood.run({ visibility: 'private', source_id: null, favorite: 0, usage_count: 0, last_used_at: null, nutrition_basis: null, alt_units: null, density_g_ml: null, source_app: null, source_external_id: null, source_url: null, deleted_at: null, ...cleanFields(f, ['name', 'brand', 'category']), updated_at: restorableUpdatedAt(f.updated_at) });
 
     // Federation source columns (source_app / source_external_id / source_url /
     // import_warnings, added for the CookTrace pull flow) are part of the
@@ -251,7 +254,7 @@ function restoreFromZip(zip) {
     for (const m of data.meals || []) insMeal.run({
       visibility: 'private', source_id: null, favorite: 0, usage_count: 0, last_used_at: null,
       source_app: null, source_external_id: null, source_url: null, import_warnings: null,
-      deleted_at: null, servings: null, ...m, updated_at: restorableUpdatedAt(m.updated_at),
+      deleted_at: null, servings: null, ...cleanFields(m, ['name']), items: cleanItemsJson(m.items), updated_at: restorableUpdatedAt(m.updated_at),
     });
 
     const insFoodShare = db.prepare(`INSERT OR IGNORE INTO food_shares (food_id, user_id) VALUES (@food_id, @user_id)`);
@@ -291,14 +294,24 @@ function restoreFromZip(zip) {
       }
       insDiary.run({
         notes: null, completed_at: null, completed_meals: null,
-        deleted_at: null, ...d, updated_at: restorableUpdatedAt(d.updated_at),
+        deleted_at: null, ...d, items: cleanItemsJson(d.items), updated_at: restorableUpdatedAt(d.updated_at),
       });
     }
 
     const insSettings = db.prepare(`
       INSERT OR IGNORE INTO user_settings (user_id, key, value, updated_at, deleted_at) VALUES (@user_id, @key, @value, COALESCE(@updated_at, datetime('now')), @deleted_at)
     `);
-    for (const s of data.user_settings || []) insSettings.run({ deleted_at: null, ...s, updated_at: restorableUpdatedAt(s.updated_at) });
+    for (const s of data.user_settings || []) {
+      // The names and labels in the four text settings are cleaned (lib/setting-text.js). A name
+      // that is nothing but control characters leaves that one setting out of the restore: a
+      // restore cannot ask for another, and the rest of the backup lands.
+      const text = cleanStoredTextSetting(s.key, s.value);
+      if (text.error) {
+        logger.warn(`[full-backup] restore left out setting ${s.key} of user ${s.user_id}: ${text.error}`);
+        continue;
+      }
+      insSettings.run({ deleted_at: null, ...s, value: text.value, updated_at: restorableUpdatedAt(s.updated_at) });
+    }
 
     const insConfig = db.prepare(`
       INSERT OR REPLACE INTO app_config (key, value) VALUES (@key, @value)
@@ -324,7 +337,7 @@ function restoreFromZip(zip) {
       INSERT OR IGNORE INTO workouts (id, user_id, source, source_id, date, activity_type, activity_name, start_time, duration_ms, distance_km, calories, avg_hr, max_hr, steps, has_gps, gps_data, synced_at, updated_at)
       VALUES (@id, @user_id, @source, @source_id, @date, @activity_type, @activity_name, @start_time, @duration_ms, @distance_km, @calories, @avg_hr, @max_hr, @steps, @has_gps, @gps_data, @synced_at, @updated_at)
     `);
-    for (const w of data.workouts || []) insWorkout.run(w);
+    for (const w of data.workouts || []) insWorkout.run(cleanFields(w, ['activity_name']));
 
     db.prepare('DELETE FROM activity_log').run();
     const insActivity = db.prepare(`
@@ -332,7 +345,7 @@ function restoreFromZip(zip) {
       VALUES (@id, @user_id, @date, @name, @kcal, @duration_min, @distance, @source, @met, @is_template, @created_at, @updated_at, @deleted_at, @external_id, @user_edited_at)
     `);
     const activityRows = (data.activity_log || []).map((a) => {
-      const row = { met: null, is_template: 0, deleted_at: null, external_id: null, user_edited_at: null, ...a };
+      const row = { met: null, is_template: 0, deleted_at: null, external_id: null, user_edited_at: null, ...cleanFields(a, ['name']) };
       // A backup from before the external_id column keeps the key in source.
       if (row.external_id == null && typeof row.source === 'string' && row.source.startsWith('external:')) {
         row.external_id = row.source.slice('external:'.length);

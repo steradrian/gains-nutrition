@@ -657,8 +657,8 @@ test('unowned single-user foods are hidden from hub accounts until claimed, HUB_
   try {
     assert.deepEqual(seen(friend), { category: undefined, imgUrl: '' });
     assert.equal(canRead(friend), false);
-    assert.equal((await call(`/api/foods/${foodId}`, { token: tokenFor('og-friend-1') })).status, 403);
-    assert.equal((await call(`/api/foods/${foodId}`, { token: tokenFor('og-owner') })).status, 403, 'the owner too, until claimed');
+    assert.equal((await call(`/api/foods/${foodId}`, { token: tokenFor('og-friend-1') })).status, 404);
+    assert.equal((await call(`/api/foods/${foodId}`, { token: tokenFor('og-owner') })).status, 404, 'the owner too, until claimed');
     hubOff();
     assert.deepEqual(seen(friend), { category: undefined, imgUrl: '' }, 'hub accounts exist: still hidden');
     assert.equal(canRead(friend), false);
@@ -669,7 +669,7 @@ test('unowned single-user foods are hidden from hub accounts until claimed, HUB_
   assert.deepEqual(seen(owner), { category: 'secret-cat', imgUrl: '/uploads/secret.jpg' });
   assert.equal((await call(`/api/foods/${foodId}`, { token: tokenFor('og-owner') })).status, 200);
   assert.deepEqual(seen(friend), { category: undefined, imgUrl: '' }, 'private to the one who claimed it');
-  assert.equal((await call(`/api/foods/${foodId}`, { token: tokenFor('og-friend-1') })).status, 403);
+  assert.equal((await call(`/api/foods/${foodId}`, { token: tokenFor('og-friend-1') })).status, 404);
 });
 
 test('usernames starting with hub- are reserved: register, accept-invite and OIDC sign-up', async () => {

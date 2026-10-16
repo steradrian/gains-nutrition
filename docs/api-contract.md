@@ -216,13 +216,13 @@ Tests: `scripts/contract-diary.test.js`.
 |---|---|---|
 | `GET /api/foods` | none | The account's foods, `ORDER BY name` (SQLite binary collation: case-sensitive) |
 | `GET /api/foods?group=1` | none | Foods others share with the account (with `_shared_by`), only when sharing is on |
-| `GET /api/foods/:id` | none | The food. **404** `{ "error": "Not found" }`, **403** `{ "error": "Forbidden" }`. Also answers a deleted food (see Known issues) |
+| `GET /api/foods/:id` | none | The account's own food. **404** `{ "error": "Not found" }` alike for another account's food (shared or private), a deleted one and one that is not there. Shared foods are read from `?group=1` |
 | `POST /api/foods` | `name` (required). Optional: `brand`, `nutrition{}`, `portion` (100), `unit` (`g`), `img_url`, `notes`, `category`, `barcode`, `visibility`, `nutrition_basis`, `alt_units`, `density_g_ml`, `source_app`, `source_external_id`, `source_url`, `client_key` | **201** with the row. **200** with an existing row for: a `client_key` already used, a `(source_app, source_external_id)` already imported, or a **barcode already in the library** (that food is returned unchanged). **400** `{ "error": "Name required" }` |
-| `PUT /api/foods/:id` | Any of the POST fields, plus `favorite` (boolean in, 0/1 stored). Omitted fields are kept; `null` clears `img_url`, `nutrition_basis`, `alt_units` and `density_g_ml` | The row. 404, 403 |
-| `DELETE /api/foods/:id` | none | `{ ok: true }` (soft delete). 404, 403 |
-| `POST /api/foods/:id/used` | `{ date: "YYYY-MM-DD" }` (otherwise the server's UTC day) | `{ ok: true }`: `usage_count + 1`, `last_used_at = max(last_used_at, date)` |
-| `PATCH /api/foods/:id/share` | `{ visibility: "private" \| "group" \| "specific", user_ids: [int] }` | `{ ok: true, visibility }`. 403 when sharing is off |
-| `POST /api/foods/:id/copy` | none | 201 the copy (200 if already copied). 400 `{ "error": "Already yours" }` |
+| `PUT /api/foods/:id` | Any of the POST fields, plus `favorite` (boolean in, 0/1 stored). Omitted fields are kept; `null` clears `img_url`, `nutrition_basis`, `alt_units` and `density_g_ml` | The row. 404 for another account's food or one that is not there |
+| `DELETE /api/foods/:id` | none | `{ ok: true }` (soft delete). 404, as PUT |
+| `POST /api/foods/:id/used` | `{ date: "YYYY-MM-DD" }` (otherwise the server's UTC day) | `{ ok: true }`: `usage_count + 1`, `last_used_at = max(last_used_at, date)`. Own live food only, else 404 |
+| `PATCH /api/foods/:id/share` | `{ visibility: "private" \| "group" \| "specific", user_ids: [int] }` | `{ ok: true, visibility }`. 403 when sharing is off. 404 for a food that is not the account's own, deleted or not there |
+| `POST /api/foods/:id/copy` | none | 201 the copy (200 if already copied). 400 `{ "error": "Already yours" }`. 403 when sharing is off. 404 for a food the account cannot read (private to another account), a deleted one and one that is not there |
 
 **Food.**
 
@@ -275,7 +275,7 @@ Tests: `scripts/contract-foods.test.js`.
 | `GET /api/meals` | Meals only (`is_recipe` false), own, by name |
 | `GET /api/meals?recipes=1` | Recipes only |
 | `GET /api/meals?group=1`, `?recipes=1&group=1` | Shared by others, when sharing is on |
-| `GET /api/meals/:id` | 404, 403. Also answers a deleted row |
+| `GET /api/meals/:id` | The account's own meal. 404 alike for another account's, a deleted one and one that is not there |
 | `POST /api/meals` | `name` (required, 400 `Name required`). Optional: `items[]`, `nutrition{}`, `is_recipe`, `portion` (100), `unit` (`g`), `servings` (int ≥ 1; **null when left out**), `img_url`, `notes`, `visibility`, `source_*`, `import_warnings[]`, `client_key`. 201, or 200 for a repeat |
 | `PUT /api/meals/:id` | The same fields plus `favorite`. Omitted fields are kept (`servings` and `is_recipe` included) |
 | `DELETE /api/meals/:id` | `{ ok: true }`, soft delete |
@@ -642,7 +642,6 @@ be, and they do not fail the suite while it is not.
 | Issue | Where | Test |
 |---|---|---|
 | `PUT /api/diary/:date` accepts any path segment as the date | `server/routes/diary.js` | `contract-diary.test.js` |
-| `GET /api/foods/:id` (and `GET /api/meals/:id`) answer a soft-deleted row with 200 | `server/routes/foods.js`, `meals.js` | `contract-foods.test.js` |
 | On an error, `/api/proxy` logs the whole upstream URL, including a USDA `api_key` | `server/routes/proxy.js` | `contract-search.test.js` |
 | `PATCH /api/fasts/:id` with `end_at: null` re-opens a fast without the one-active-fast check, so two fasts can be active | `server/routes/fasts.js` | `contract-fasting.test.js` |
 

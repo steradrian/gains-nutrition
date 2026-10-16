@@ -3,6 +3,7 @@ import { logger } from '../logger.js';
 import { fetchChecked, readBody } from '../lib/ssrf-guard.js';
 import { makeRateLimiter } from '../middleware/rate-limit.js';
 import { isLocalOffEnabled, isLocalOffOnly, lookupByBarcode, searchByName } from '../lib/off-local.js';
+import { userAgentFor } from '../lib/off-user-agent.js';
 
 const router = Router();
 const proxyLimit = makeRateLimiter({ max: 60, windowMs: 60_000, label: 'proxy' });
@@ -63,7 +64,9 @@ router.get('/', async (req, res) => {
     // server's own network or to cloud metadata.
     const response = await fetchChecked(url, {
       signal: controller.signal,
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; NutriTrace/1.0)' },
+      // An Open Food Facts host (search, product, images) is told who is asking, as OFF
+      // requires of an app (lib/off-user-agent.js); every other host gets what it always did.
+      headers: { 'User-Agent': userAgentFor(url, 'Mozilla/5.0 (compatible; NutriTrace/1.0)') },
     }, { maxRedirects: 3 });
 
     if (!response.ok) {

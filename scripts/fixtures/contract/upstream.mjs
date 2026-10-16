@@ -55,12 +55,20 @@ export const USDA_SEARCH = {
   ],
 };
 
+// A one-pixel PNG, what images.openfoodfacts.org answers with.
+const PIXEL = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==', 'base64');
+
 export async function startUpstream() {
   const seen = [];
+  // The User-Agent of each request, in step with `seen` (kept apart so the shape of a `seen`
+  // entry, which tests compare whole, does not change).
+  const agents = [];
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://upstream.invalid');
     const host = req.headers['x-contract-host'] || '';
     seen.push({ host, path: url.pathname, query: Object.fromEntries(url.searchParams) });
+    agents.push(req.headers['user-agent'] || '');
+    if (host === 'images.openfoodfacts.org') { res.writeHead(200, { 'content-type': 'image/png' }); return res.end(PIXEL); }
     const send = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
     if (host === 'search.openfoodfacts.org' && url.pathname === '/search') {
       const q = url.searchParams.get('q') || '';
@@ -90,6 +98,7 @@ export async function startUpstream() {
   return {
     origin: `http://127.0.0.1:${server.address().port}`,
     seen,
+    agents,
     close: () => new Promise(r => server.close(r)),
   };
 }

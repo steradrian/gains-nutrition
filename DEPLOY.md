@@ -121,6 +121,7 @@ services:
 | `DB_PATH` | Yes | `./nutritrace.db` | Path to SQLite database file |
 | `UPLOADS_PATH` | Yes | `./uploads` | Path for uploaded food/meal images |
 | `UPDATE_CHECK` | No | unset | Set to `off` to stop the server asking GitHub about new releases, whatever the in-app setting says |
+| `OFF_USER_AGENT` | No | `Gains/0.1.0 (+https://github.com/steradrian/gains)` | The User-Agent the server sends to Open Food Facts (searches, product lookups and images through `/api/proxy`, food photos it saves, the local mirror's download). OFF asks for an app name, version and a way to reach you, e.g. `MyGains/1.0 (+https://github.com/you/your-gains)`. Printable ASCII only, 200 characters at most. Other hosts are not affected. |
 | `JWT_SECRET` | Yes (prod) | `dev-secret` | Secret for signing JWT auth tokens — **change this**. Server refuses to start in production with the dev default. |
 | `TOKEN_ENC_KEY` | No | derived from `JWT_SECRET` | At-rest encryption key (AES-GCM, HKDF) for OIDC client secrets and wearable OAuth tokens. By default we derive a key from `JWT_SECRET`, which means rotating `JWT_SECRET` invalidates every stored secret too. Set `TOKEN_ENC_KEY` explicitly if you want to rotate session tokens without forcing users to re-authorize their wearables and re-enter OIDC client secrets. Use a long random string (e.g. `openssl rand -base64 48`). |
 | `PORT` | No | `3001` | Internal Express port (map to host in docker-compose) |

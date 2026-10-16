@@ -13,10 +13,28 @@ export function cleanCreateKey(v) {
   return typeof v === 'string' && v.trim() ? v.trim().slice(0, 128) : null;
 }
 
-/** The account's row made with this key before, or null. */
-export function findByCreateKey(table, userId, key) {
+// The tables with a client_key (db.js), each with a deleted_at: a delete is a soft delete.
+const KEYED_TABLES = new Set(['foods', 'meals', 'activity_log', 'fasts']);
+
+/**
+ * The account's live row made with this key before, or null.
+ *
+ * A row that has been deleted (deleted_at set) is not "the row made the first
+ * time": sending its key again is a new save, and it makes a new row, rather
+ * than handing back the deleted one (which brought a deleted food back).
+ *
+ * The sync push is the one caller that wants the deleted row too
+ * (`includeDeleted`): it sends a key again because its answer was lost, and
+ * if the row was deleted in between (on the web, or on another device),
+ * "already made" is still the right answer. Making a second row there would
+ * bring back what the person just deleted, a duplicate of it.
+ */
+export function findByCreateKey(table, userId, key, { includeDeleted = false } = {}) {
   if (!key) return null;
-  return db.prepare(`SELECT * FROM ${table} WHERE client_key = ? AND user_id IS ?`).get(key, userId ?? null) || null;
+  if (!KEYED_TABLES.has(table)) throw new Error(`findByCreateKey: ${table} has no create keys`);
+  const live = includeDeleted ? '' : ' AND deleted_at IS NULL';
+  // A key can now sit on a deleted row and on the live row that replaced it: the live one first.
+  return db.prepare(`SELECT * FROM ${table} WHERE client_key = ? AND user_id IS ?${live} ORDER BY (deleted_at IS NULL) DESC, id DESC`).get(key, userId ?? null) || null;
 }
 
 export function setCreateKey(table, id, key) {

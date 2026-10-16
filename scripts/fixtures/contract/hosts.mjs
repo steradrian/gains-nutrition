@@ -1,6 +1,6 @@
 // The upstream hosts the contract tests fake: the ones /api/proxy may reach
 // for food data (server/routes/proxy.js API_ALLOWED).
-export const FAKE_HOSTS = new Set(['world.openfoodfacts.org', 'search.openfoodfacts.org', 'api.nal.usda.gov']);
+export const FAKE_HOSTS = new Set(['world.openfoodfacts.org', 'search.openfoodfacts.org', 'api.nal.usda.gov', 'images.openfoodfacts.org']);
 
 // A public documentation address (TEST-NET-3), so the SSRF guard's check of
 // the resolved address passes without a real DNS lookup.

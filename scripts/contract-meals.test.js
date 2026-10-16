@@ -88,4 +88,5 @@ test('POST /api/meals/:id/used and DELETE /api/meals/:id', async () => {
   assert.equal(del.status, 200);
   assert.deepEqual(del.body, { ok: true });
   assert.deepEqual((await srv.api('GET', '/api/meals')).body, []);
+  assert.equal((await srv.api('GET', `/api/meals/${meal.id}`)).status, 404, 'a deleted meal is not found by id');
 });

@@ -54,6 +54,7 @@ import db from '../../../db.js';
 import { wrap } from '../../../logger.js';
 import { BATCH_MAX_ITEMS, chargeRateLimit, requireScope } from '../../../middleware/bearer-auth.js';
 import { BRIDGE_SOURCE } from '../../../lib/active-calories.js';
+import { cleanText } from '../../../lib/clean-text.js';
 import { isCalendarDate } from '../../../lib/mcp/_util.js';
 
 const router = Router();
@@ -95,7 +96,7 @@ function _parseEntry(body) {
   const { date, name, kcal, duration_min, distance, external_id, source } = body || {};
   if (typeof date !== 'string' || !isCalendarDate(date)) return _invalid('bad_date', 'date must be YYYY-MM-DD');
   if (typeof name !== 'string') return _invalid('bad_name', 'name must be a string');
-  const cleanName = name.trim().slice(0, 80);
+  const cleanName = cleanText(name).trim().slice(0, 80);
   if (!cleanName) return _invalid('bad_name', 'name required');
   const kcalNum = _number(kcal);
   if (kcalNum == null || kcalNum < 0 || kcalNum > 10000) {

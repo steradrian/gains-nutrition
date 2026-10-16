@@ -43,6 +43,7 @@ import path from 'path';
 import { pipeline } from 'stream/promises';
 import { logger } from '../logger.js';
 import { stripAccents } from './search-text.js';
+import { userAgentFor } from './off-user-agent.js';
 
 // OFF removed their pre-built DuckDB snapshot from challenges.openfoodfacts.org
 // some time before rc.38 shipped (the URL now 302s back to the main site,
@@ -480,7 +481,10 @@ async function _runRefresh(source) {
     // Clean up any stale .new from a previous failed run.
     try { fs.unlinkSync(newPath); } catch {}
 
-    const res = await fetch(url, { redirect: 'follow' });
+    // A mirror pulled from an Open Food Facts host says who is asking (off-user-agent.js); the
+    // default Hugging Face address is sent as before.
+    const agent = userAgentFor(url, null);
+    const res = await fetch(url, { redirect: 'follow', ...(agent ? { headers: { 'User-Agent': agent } } : {}) });
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
     const lenHeader = res.headers.get('content-length');
     _refreshBytesTotal = lenHeader ? parseInt(lenHeader, 10) : 0;
