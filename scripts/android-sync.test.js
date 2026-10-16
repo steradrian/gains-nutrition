@@ -41,14 +41,28 @@ let server = null, base = null, sqlite = null;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const freePort = () => new Promise(res => { const s = createServer(); s.listen(0, () => { const p = s.address().port; s.close(() => res(p)); }); });
 
+// One fresh connection per request. phone() blocks this process's event
+// loop in spawnSync for seconds; fetch's pooled keep-alive socket then sits
+// past the server's 5 s idle timeout, its close is never processed, and the
+// next request on it fails with "fetch failed" (more often the slower the
+// machine is). A request that never reuses a socket cannot hit that, and
+// needs no retry (which would also resend a POST).
+function send(method, path, headers, body) {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(base + path, { method, headers, agent: false }, res => {
+      const parts = [];
+      res.on('data', c => parts.push(c));
+      res.on('end', () => resolve({ status: res.statusCode, ok: res.statusCode >= 200 && res.statusCode < 300, text: Buffer.concat(parts).toString('utf8') }));
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+}
 async function http(tok, method, path, body) {
-  const go = () => fetch(base + path, { method, headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: `Bearer ${tok}` } : {}) }, body: body ? JSON.stringify(body) : undefined });
-  // A kept-alive connection the server closed meanwhile (its 5 s idle
-  // timeout, during a long phone run) fails once with "fetch failed".
-  const r = await go().catch(e => { if (e?.message === 'fetch failed') return go(); throw e; });
-  const t = await r.text();
-  if (!r.ok) throw new Error(`${method} ${path} ${r.status} ${t.slice(0, 200)}`);
-  return t ? JSON.parse(t) : null;
+  const r = await send(method, path, { 'Content-Type': 'application/json', ...(tok ? { Authorization: `Bearer ${tok}` } : {}) }, body ? JSON.stringify(body) : undefined);
+  if (!r.ok) throw new Error(`${method} ${path} ${r.status} ${r.text.slice(0, 200)}`);
+  return r.text ? JSON.parse(r.text) : null;
 }
 // Sign-in is rate limited (10 a quarter hour per address), so only the
 // first account signs in; the others get a session the way the server
@@ -225,9 +239,9 @@ test("settings still coming down for the last account write nothing into the nex
 });
 
 async function account(name, admin) {
-  const r = await fetch(base + '/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(admin ? { Authorization: `Bearer ${admin}` } : {}) }, body: JSON.stringify({ username: name, password: 'Str0ng-Pass-77!x' }) });
+  const r = await send('POST', '/api/auth/register', { 'Content-Type': 'application/json', ...(admin ? { Authorization: `Bearer ${admin}` } : {}) }, JSON.stringify({ username: name, password: 'Str0ng-Pass-77!x' }));
   if (!admin) return (await http(null, 'POST', '/api/auth/login', { username: name, password: 'Str0ng-Pass-77!x' })).token;
-  const { user } = await r.json();
+  const { user } = JSON.parse(r.text);
   const jwt = createRequire(new URL('../server/package.json', import.meta.url))('jsonwebtoken');
   return jwt.sign({ id: user.id, username: user.username, role: user.role, csrf: 'test' }, JWT_SECRET, { expiresIn: '1h' });
 }
