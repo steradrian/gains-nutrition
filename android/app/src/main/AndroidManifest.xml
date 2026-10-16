@@ -130,10 +130,6 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-    <!-- Required for in-app update: hand APK to system installer via
-         Intent.ACTION_VIEW / FileProvider (@capacitor-community/file-opener).
-         Without this, Android 8+ blocks the install prompt. -->
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Speech recognition (Smart Log voice input) -->
     <queries>

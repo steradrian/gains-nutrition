@@ -49,6 +49,16 @@
       <span>{$_('settings_about.server_from')} <a href="https://github.com/steradrian/gains-nutrition" target="_blank" rel="noopener" class="about-link">{$_('settings_about.server_open_source')}</a> {$_('settings_about.server_license')}</span>
     </div>
     <div class="setting-divider"></div>
+    <div class="about-row">
+      <span class="material-symbols-rounded about-feat-icon">gavel</span>
+      <span>{$_('settings_about.based_on')} <a href="https://github.com/TraceApps/nutritrace" target="_blank" rel="noopener" class="about-link">{$_('settings_about.based_on_project')}</a> {$_('settings_about.based_on_license')}</span>
+    </div>
+    <div class="setting-divider"></div>
+    <div class="about-row">
+      <span class="material-symbols-rounded about-feat-icon">translate</span>
+      <span>{$_('settings_about.translations_credit')}</span>
+    </div>
+    <div class="setting-divider"></div>
     <div class="about-desc" style="font-size:11px;color:var(--text-3);line-height:1.5">
       <strong>Disclaimer.</strong> NutriTrace is not medical, health, or nutrition-professional
       software. It does not provide medical advice, diagnosis, treatment, or personalized nutrition

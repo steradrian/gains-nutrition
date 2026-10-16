@@ -1083,7 +1083,11 @@
     "food_data_license": "(ODbL)",
     "server_from": "Server:",
     "server_open_source": "Open Source",
-    "server_license": "(AGPL-3.0)"
+    "server_license": "(AGPL-3.0)",
+    "based_on": "Based on",
+    "based_on_project": "NutriTrace by TraceApps",
+    "based_on_license": "(AGPL-3.0), modified",
+    "translations_credit": "Translations: original NutriTrace contributors via Weblate"
   },
   "settings_merge": {
     "title": "Sync Options",

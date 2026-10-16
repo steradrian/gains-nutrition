@@ -28,7 +28,7 @@ test('the server does not mount or import the update check', () => {
 test('the old updates routes answer nothing from the update check', async () => {
   const srv = await startServer({ file: import.meta.url });
   try {
-    for (const path of ['/api/updates/server-status', '/api/updates/setting']) {
+    for (const path of ['/api/updates/server-status', '/api/updates/config']) {
       const r = await srv.api('GET', path);
       const isUpdateJson = r.body !== null && typeof r.body === 'object'
         && ('current' in r.body || 'disabled' in r.body || 'enabled' in r.body);
