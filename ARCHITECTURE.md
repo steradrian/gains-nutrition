@@ -244,8 +244,6 @@ See `.env.example` for the full list. Key ones:
   use; unset, an address an admin has used, never request headers
 - `ALLOW_PRIVATE_IMAGE_URLS`, lets every account, not only an admin,
   download photo links from the server's own network
-- `UPDATE_CHECK=off`, turns the server's GitHub release checks off
-  whatever the in-app setting says
 
 ## Conventions
 

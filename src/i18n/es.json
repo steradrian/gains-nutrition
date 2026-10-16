@@ -311,9 +311,6 @@
     "diagnostics": {
       "section": "Diagnósticos"
     },
-    "updates": {
-      "section": "Actualizaciones"
-    },
     "api_tokens": {
       "section": "Tokens de API"
     },
@@ -322,9 +319,6 @@
     },
     "webhooks": {
       "section": "Webhooks"
-    },
-    "support": {
-      "section": "Apoyar"
     }
   },
   "accept_invite": {
@@ -374,74 +368,9 @@
     }
   },
   "updates": {
-    "current_version": "Versión actual",
-    "channel": {
-      "label": "Canal de actualizaciones",
-      "stable": "Estable",
-      "dev": "Desarrollo",
-      "help": "Estable sigue las versiones publicadas. Desarrollo es la versión en desarrollo continuo: puede tener errores."
-    },
-    "auto_check": "Buscar actualizaciones automáticamente",
-    "auto_check_desc": "Busca versiones nuevas en segundo plano.",
-    "interval": {
-      "label": "Frecuencia de búsqueda",
-      "desc": "Con qué frecuencia la app busca una versión nueva mientras está abierta. \"Solo manual\" desactiva todas las búsquedas automáticas.",
-      "hourly": "Cada hora",
-      "every_4h": "Cada 4 horas",
-      "every_12h": "Cada 12 horas",
-      "daily": "Una vez al día",
-      "manual": "Solo manual"
-    },
-    "last_checked": "Última comprobación",
-    "last_checked_never": "Nunca",
-    "check_now": "Comprobar ahora",
-    "checking": "Comprobando…",
-    "check_failed": "No se pudieron buscar actualizaciones. Vuelve a intentarlo en un momento.",
-    "up_to_date": "Tienes la última versión",
-    "available_headline": "La versión {version} está disponible",
-    "released": "Publicado el {when}",
-    "release_notes_heading": "Novedades",
-    "no_release_notes": "No hay notas de cambios disponibles para esta versión.",
-    "view_on_github": "Ver en GitHub",
-    "download_install": "Descargar e instalar",
-    "downloading": "Descargando… {percent} %",
-    "install_starting": "Abriendo instalador…",
-    "install_failed": "No se pudo instalar. Vuelve a intentarlo.",
-    "skip_this_version": "Omitir esta versión",
-    "no_apk_asset": "Esta versión no tiene un archivo APK adjunto.",
-    "banner_cta": "Toca para ver novedades e instalar.",
-    "banner_view": "Ver",
-    "available_generic": "Hay una nueva versión disponible",
-    "banner_reload": "Recargar",
-    "storage": {
-      "heading": "APK de actualizaciones en caché",
-      "empty": "Sin APK en caché. La limpieza se completó con éxito.",
-      "clear_now": "Limpiar ahora",
-      "clearing": "Limpiando…",
-      "cleared": "Caché borrada."
-    },
-    "server": {
-      "heading": "Servidor",
-      "headline": "Actualización de servidor {latest} disponible",
-      "behind_desc": "Actualización disponible: {latest}",
-      "current_desc": "Tienes la última versión",
-      "versions": "Servidor en versión {current}. Último lanzamiento: {latest}.",
-      "available_chip": "Actualización disponible",
-      "instructions": "Para actualizar el servidor, ejecuta en el equipo host:",
-      "copy_command": "Copiar comando",
-      "copied": "Copiado al portapapeles.",
-      "copy_failed": "No se pudo copiar. Copia el comando a mano.",
-      "view_notes": "Ver notas de la versión",
-      "channel_note": "Para cambiar de canal en el servidor, cambia la etiqueta de la imagen en tu docker-compose.yml (:latest, :dev) y vuelve a ejecutar docker-compose pull && docker-compose up -d."
-    },
-    "off_resting": "Desactivado. Tu servidor no va a contactar a GitHub. Actívalo para enterarte de funciones nuevas, correcciones y actualizaciones de seguridad.",
-    "off_notice_title": "Búsqueda de actualizaciones desactivada",
-    "off_notice": "Nada te va a avisar de funciones nuevas, correcciones ni actualizaciones de seguridad. Si lo activas, se le consulta a GitHub por la última versión cada pocas horas, sin enviar nada sobre ti.",
-    "turn_on": "Activar",
-    "not_now": "Ahora no",
-    "install_downloaded": "Instalar",
     "ready_headline": "Actualización lista",
-    "ready_cta": "Recarga para tener la última versión."
+    "ready_cta": "Recarga para tener la última versión.",
+    "banner_reload": "Recargar"
   },
   "login": {
     "subtitle": "Inicia sesión en tu cuenta",
@@ -652,13 +581,6 @@
     "notifications": {
       "title": "Mantén el rumbo",
       "desc": "Recibe recordatorios útiles y festeja tus logros. Puedes ajustar todo esto después en Ajustes."
-    },
-    "updates": {
-      "title": "Buscar actualizaciones",
-      "desc": "Tu servidor puede avisarte cuando sale una nueva versión de NutriTrace.",
-      "toggle": "Buscar actualizaciones automáticamente",
-      "toggle_sub": "Así te enteras de funciones nuevas, correcciones y actualizaciones de seguridad",
-      "note": "Tu servidor le consulta a GitHub cada pocas horas si salió una versión nueva de NutriTrace. No se envía nada sobre ti ni sobre tus datos. Puedes cambiarlo cuando quieras en Ajustes, Actualizaciones."
     },
     "summary": {
       "title": "Tus objetivos diarios",
@@ -1172,7 +1094,7 @@
   "settings_diagnostics": {
     "diag_mode": "Modo diagnóstico",
     "view_logs": "Ver registros de diagnóstico",
-    "logs_desc_web": "Últimas líneas del registro de la consola de la app. Sirven para reportar errores; cópialas o compártelas en un <a href=\"https://github.com/traceapps/nutritrace/issues\" target=\"_blank\" rel=\"noopener\" class=\"about-link\">issue de GitHub</a>.",
+    "logs_desc_web": "Últimas líneas del registro de la consola de la app. Sirven para reportar errores; cópialas o compártelas en un <a href=\"https://github.com/steradrian/gains-nutrition/issues\" target=\"_blank\" rel=\"noopener\" class=\"about-link\">issue de GitHub</a>.",
     "logs_desc_android": " En Android con el modo diagnóstico activo también puedes compartir el archivo de registro guardado o cualquier reporte de fallo capturado.",
     "logs_note": "No se envía nada a ningún lado de forma automática.",
     "calibration_export": "Exportar calibración",
@@ -1185,8 +1107,7 @@
     "food_data_license": "(ODbL)",
     "server_from": "Servidor:",
     "server_open_source": "Código abierto",
-    "server_license": "(AGPL-3.0)",
-    "translations_from": "Traducciones con la ayuda de"
+    "server_license": "(AGPL-3.0)"
   },
   "settings_merge": {
     "title": "Opciones de sincronización",
@@ -1850,7 +1771,7 @@
       "copied": "Token copiado al portapapeles",
       "copy_failed": "No se pudo copiar. Selecciónalo y cópialo a mano."
     },
-    "intro_before": "Tokens Bearer para las apps hermanas de TraceApps (LiftTrace, CookTrace",
+    "intro_before": "Tokens Bearer para apps complementarias (LiftTrace, CookTrace",
     "intro_middle": ") u otras integraciones autorizadas, para leer o escribir tus datos a través de la API de federación en",
     "intro_dev": "(en desarrollo)",
     "intro_see": "Mira",
@@ -2303,15 +2224,5 @@
     "hint": {
       "tap_sync": "Toca \"Sincronizar\" para traer los últimos datos de tu dispositivo conectado."
     }
-  },
-  "settings_support": {
-    "lead": "NutriTrace es gratis y siempre lo va a ser. Apoyar es opcional y nunca desbloquea nada.",
-    "other_ways": "Otras formas de ayudar",
-    "star": "Estrella en GitHub",
-    "star_desc": "Las estrellas son lo que hace que la gente encuentre los proyectos que se instalan en un servidor propio.",
-    "report_bug": "Reportar un error",
-    "report_bug_desc": "Un reporte claro lo arregla para todos los que se topan con lo mismo.",
-    "translate": "Ayudar a traducir",
-    "translate_desc": "Haz que NutriTrace se pueda usar en tu idioma, en Weblate."
   }
 }

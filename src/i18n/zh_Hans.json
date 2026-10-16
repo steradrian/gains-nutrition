@@ -55,9 +55,6 @@
     "hide": "隐藏",
     "admin": "管理员"
   },
-  "updates": {
-    "skip_this_version": "跳过这个版本"
-  },
   "routes": {
     "diary": {
       "title": "日记"

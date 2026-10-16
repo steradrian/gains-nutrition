@@ -88,7 +88,7 @@ function warnIfPlainHttp(req) {
   _plainHttpWarnedAt = Date.now();
   let page = origin;
   try { page = new URL(origin).origin; } catch {}
-  console.warn(`[WARN] Sign-in from a plain-HTTP page (${page}). The sign-in cookie only works over HTTPS, so the browser drops it and the user lands back on the login page. Serve NutriTrace over HTTPS, or set INSECURE_COOKIES=1 on a trusted LAN. See https://traceapps.github.io/docs/getting-started/lan-http/`);
+  console.warn(`[WARN] Sign-in from a plain-HTTP page (${page}). The sign-in cookie only works over HTTPS, so the browser drops it and the user lands back on the login page. Serve NutriTrace over HTTPS, or set INSECURE_COOKIES=1 on a trusted LAN. See https://github.com/steradrian/gains-nutrition/blob/main/DEPLOY.md#environment-variables-reference`);
 }
 
 function safeUser(u) {

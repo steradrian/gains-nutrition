@@ -57,7 +57,7 @@ if (_upper || _lower) {
       console.warn(
         '[server] proxy-agent install failed: Invalid URL. HTTP_PROXY / HTTPS_PROXY must include a scheme like ' +
         '"http://user:pass@proxy.host:3128". Bare "host:port" or "user:pass@host:port" is not accepted. ' +
-        'See https://traceapps.github.io/docs/self-hosting/env-vars/#value-format'
+        'See https://github.com/steradrian/gains-nutrition/blob/main/DEPLOY.md#environment-variables-reference'
       );
     } else {
       console.warn('[server] proxy-agent install failed:', msg);

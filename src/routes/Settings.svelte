@@ -48,14 +48,12 @@
   import Backup            from './settings/Backup.svelte';
   import ImportExport      from './settings/ImportExport.svelte';
   import Sharing           from './settings/Sharing.svelte';
-  import Updates           from './settings/Updates.svelte';
   import HelpImprove       from './settings/HelpImprove.svelte';
   import Users             from './settings/Users.svelte';
   import Authentication    from './settings/Authentication.svelte';
   import Email             from './settings/Email.svelte';
   import ApiTokens         from './settings/ApiTokens.svelte';
   import Webhooks          from './settings/Webhooks.svelte';
-  import Support           from './settings/Support.svelte';
   import About             from './settings/About.svelte';
   import Profile           from './Profile.svelte';
   import { foldText } from '../lib/search-text.js';
@@ -247,14 +245,12 @@
     backup:            { titleKey: 'settings.backup.section',            icon: 'archive' },
     importExport:      { titleKey: 'settings.importExport.section',      icon: 'import_export' },
     sharing:           { titleKey: 'settings.sharing.section',           icon: 'group' },
-    updates:           { titleKey: 'settings.updates.section',           icon: 'system_update' },
     helpImprove:       { titleKey: 'settings.diagnostics.section',       icon: 'troubleshoot' },
     users:             { titleKey: 'settings.users.section',             icon: 'group' },
     authentication:    { titleKey: 'settings.authentication.section',    icon: 'shield_person' },
     email:             { titleKey: 'settings.email.section',             icon: 'mail' },
     apiTokens:         { titleKey: 'settings.api_tokens.section',        icon: 'key' },
     webhooks:          { titleKey: 'settings.webhooks.section',          icon: 'webhook' },
-    support:           { titleKey: 'settings.support.section',           icon: 'volunteer_activism' },
     about:             { titleKey: 'settings.about.section',             icon: 'info' },
     profile:           { titleKey: 'profile.title',                      icon: 'person' },
   };
@@ -281,14 +277,12 @@
     backup:            Backup,
     importExport:      ImportExport,
     sharing:           Sharing,
-    updates:           Updates,
     helpImprove:       HelpImprove,
     users:             Users,
     authentication:    Authentication,
     email:             Email,
     apiTokens:         ApiTokens,
     webhooks:          Webhooks,
-    support:           Support,
     about:             About,
     profile:           Profile,
   };
@@ -324,8 +318,6 @@
     apiTokens:         ['api','api tokens','token','federation','cooktrace','lifttrace','bearer','integration','integrations','external','third-party','third party'],
     webhooks:          ['webhooks','webhook','automation','n8n','home assistant','ifttt','push','event','integration','integrations','http post','callback url','signature','hmac','secret'],
     helpImprove:       ['diagnostics','logs','verbose','calibration','export','bug','report','troubleshoot'],
-    updates:           ['updates','update','upgrade','version','new version','changelog','release','releases','apk','install','download','check for updates','auto-check','check frequency','check interval','how often','hourly','daily','manual','manual only','cadence','banner','notification','channel','stable','dev','dev-latest','beta','github','server update','docker','compose','docker-compose'],
-    support:           ['support','donate','donation','sponsor','github sponsors','ko-fi','kofi','tip','star','report a bug','bug','translate','weblate','help'],
     about:             ['about','version','nutritrace','license'],
   };
 
@@ -631,11 +623,6 @@
       <span class="material-symbols-rounded chevron">expand_more</span>
     </button>
   {/if}
-  <button class="section-toggle" class:hidden={!sectionVisible(settingsQuery, 'updates')} class:active={currentSection === 'updates'} aria-current={currentSection === 'updates' ? 'page' : undefined} on:click={() => toggleSection('updates')}>
-    <span class="material-symbols-rounded si">system_update</span>
-    <span>{$_('settings.updates.section')}</span>
-    <span class="material-symbols-rounded chevron">expand_more</span>
-  </button>
   <button class="section-toggle" class:hidden={!sectionVisible(settingsQuery, 'helpImprove')} class:active={currentSection === 'helpImprove'} aria-current={currentSection === 'helpImprove' ? 'page' : undefined} on:click={() => toggleSection('helpImprove')}>
     <span class="material-symbols-rounded si">troubleshoot</span>
     <span>{$_('settings.diagnostics.section')}</span>
@@ -678,11 +665,6 @@
   {/if}
 
   <p class="settings-group-label">NutriTrace</p>
-  <button class="section-toggle" class:hidden={!sectionVisible(settingsQuery, 'support')} class:active={currentSection === 'support'} aria-current={currentSection === 'support' ? 'page' : undefined} on:click={() => toggleSection('support')}>
-    <span class="material-symbols-rounded si">volunteer_activism</span>
-    <span>{$_('settings.support.section')}</span>
-    <span class="material-symbols-rounded chevron">expand_more</span>
-  </button>
   <button class="section-toggle" class:hidden={!sectionVisible(settingsQuery, 'about')} class:active={currentSection === 'about'} aria-current={currentSection === 'about' ? 'page' : undefined} on:click={() => toggleSection('about')}>
     <span class="material-symbols-rounded si">info</span>
     <span>{$_('settings.about.section')}</span>

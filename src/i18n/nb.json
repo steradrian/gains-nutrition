@@ -311,91 +311,20 @@
     "diagnostics": {
       "section": "Diagnostikk"
     },
-    "updates": {
-      "section": "Oppdateringer"
-    },
     "api_tokens": {
       "section": "API-tokener"
     },
     "webhooks": {
       "section": "Webhooks"
     },
-    "support": {
-      "section": "Støtte"
-    },
     "about": {
       "section": "Om"
     }
   },
   "updates": {
-    "current_version": "Nåværende versjon",
-    "channel": {
-      "label": "Oppdateringskanal",
-      "stable": "Stabil",
-      "dev": "Utvikler",
-      "help": "Stabil følger merkede utgivelser. Utvikler er den løpende utviklingsversjonen; forvent feil."
-    },
-    "auto_check": "Sjekk automatisk for oppdateringer",
-    "auto_check_desc": "Sjekk for nye utgivelser i bakgrunnen.",
-    "off_resting": "Av. Din server vil ikke kontakte GitHub. Skru den på for å høre om nye funksjoner, feilrettinger og sikkerhetsoppdateringer.",
-    "off_notice_title": "Oppdaterings sjekk er av",
-    "off_notice": "Ingenting vil fortelle deg om nye funksjoner. feilrettinger eller sikkerhetsoppdateringer. Hvis aktivert, spør GitHub for den nyeste utgivelsen med noen timers mellomrom, uten å sende noen opplysninger om deg.",
-    "turn_on": "Skru på",
-    "not_now": "Ikke nå",
-    "interval": {
-      "label": "Sjekkfrekvens",
-      "desc": "Hvor ofte appen sjekker for en ny utgave når den er åpen. Kun Manuelt skrur kun av alle automatiske sjekkere.",
-      "hourly": "Hver time",
-      "every_4h": "Hver 4. time",
-      "every_12h": "Hver 12. time",
-      "daily": "En gang om dagen",
-      "manual": "Kun Manuelt"
-    },
-    "last_checked": "Sist sjekket",
-    "last_checked_never": "Aldri",
-    "check_now": "Sjekk nå",
-    "checking": "Sjekker…",
-    "check_failed": "Oppdatering sjekk feilet. Prøv igjen snart.",
-    "up_to_date": "Du er på den nyeste versjonen",
-    "available_headline": "{version} er tilgjengelig",
-    "released": "Utgitt {when}",
-    "release_notes_heading": "Hva er nytt",
-    "no_release_notes": "Ingen utgivelsesnotater ble publisert for denne versjonen.",
-    "view_on_github": "Se på GitHub",
-    "download_install": "Last ned & installer",
-    "install_downloaded": "Installer",
-    "downloading": "Laster ned... {percent}%",
-    "install_starting": "Åpner installasjonsprogrammet…",
-    "install_failed": "Installasjon feilet. Prøv igjen.",
-    "skip_this_version": "Hopp over denne versjonen",
-    "no_apk_asset": "Denne utgivelsen har ingen vedlagt APK-fil.",
-    "banner_cta": "Trykk for å se hva som er nytt og installer.",
-    "banner_view": "Se",
-    "available_generic": "En ny versjon er tilgjengelig",
     "ready_headline": "Oppdatering tilgjengelig",
     "ready_cta": "Last inn på nytt for å få den nyeste versjonen.",
-    "banner_reload": "Last inn på nytt",
-    "storage": {
-      "heading": "Bufrede oppdaterings-APK-er",
-      "empty": "Ingen bufrede APK-er. Oppryddingsprosessene ble fullført uten problemer.",
-      "clear_now": "Tøm nå",
-      "clearing": "Tømmer…",
-      "cleared": "Buffer tømt."
-    },
-    "server": {
-      "heading": "Server",
-      "headline": "Server oppdatering {latest} tilgjengelig",
-      "behind_desc": "Oppdatering tilgjengelig: {latest}",
-      "current_desc": "Du er på den nyeste versjonen",
-      "versions": "Serveren er på {current}. Nyeste versjon: {latest}.",
-      "available_chip": "Oppdatering tilgjengelig",
-      "instructions": "For å oppdatere serveren, kjør på vertsmaskinen:",
-      "copy_command": "Kopier kommando",
-      "copied": "Kopiert til utskriftstavle.",
-      "copy_failed": "Kopiering feilet. Kopier kommandoen manuelt.",
-      "view_notes": "Vis endringslogg",
-      "channel_note": "For å bytte serverkanal må du endre bildetaggen (:latest, :dev) i din docker-compose.yml og kjøre docker-compose pull && docker-compose up -d på nytt."
-    }
+    "banner_reload": "Last inn på nytt"
   },
   "attach_image": {
     "button": "Legg ved bilde",
@@ -618,13 +547,6 @@
     "notifications": {
       "title": "Hold på de gode vanene",
       "desc": "Få nyttige påminnelser og feir seirene dine. Du kan tilpasse alt dette senere i innstillinger."
-    },
-    "updates": {
-      "title": "Sjekk for oppdateringer",
-      "desc": "Serveren din kan fortelle deg når en ny NutriTrace har blitt utgitt.",
-      "toggle": "Sjekk for oppdateringer automatisk",
-      "toggle_sub": "Det er hvordan du hører om nye funksjoner, rettelser og sikkerhetsoppdateringer",
-      "note": "Serveren din spør GitHub med noen timers mellomrom om det finnes en ny versjon av NutriTrace. Ingen informasjon om deg eller dataene dine blir sendt. Du kan når som helst endre dette under Innstillinger, Oppdateringer."
     },
     "summary": {
       "title": "Dine daglige mål",

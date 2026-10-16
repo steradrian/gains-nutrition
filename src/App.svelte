@@ -236,6 +236,7 @@
     '*':                  Diary,
   };
 
+  const PWA_POLL_MS = 4 * 60 * 60 * 1000;
   const NAV_HIDDEN = ['/wizard', '/foods/edit', '/meal-editor', '/profile'];
   $: showNav       = !NAV_HIDDEN.some(p => $location.startsWith(p));
   $: _bottomNavVisible = showNav && ($navStyle === 'bottom' || $navStyle === 'both');
@@ -349,10 +350,6 @@
 
   onMount(async () => {
     initFold();
-    // Update checks: a device that was already using the app keeps checking,
-    // a fresh one stays quiet until setup asks. Runs first so nothing above
-    // can skip it (see lib/updates.js).
-    import('./lib/updates.js').then(({ migrateAutoCheck }) => migrateAutoCheck()).catch(() => {});
     // Local-mode scheduled backup tick — JS-side scheduler that fires
     // exportLocalBackup() when the user's schedule is due. No-ops in
     // PWA / server modes. See src/lib/local-backup-scheduler.js for
@@ -363,71 +360,20 @@
       }).catch(e => console.warn('[local-backup] scheduler start failed:', e?.message));
     }
 
-    // In-app-update cache housekeeping — deletes APKs in
-    // Directory.Data/updates/ whose version is ≤ the running APP_VERSION
-    // (leftovers from the update that just installed) plus anything
-    // older than 7 days (orphans from cancelled downloads). Native-only
-    // + best-effort — silent on failure.
-    if (isNative) {
-      import('./lib/updates.js').then(({ cleanUpdateCache }) => {
-        cleanUpdateCache();
-      }).catch(() => { /* ignore */ });
-
-      // Tap-handler for the OS "update available" notification. Routes
-      // into Settings → Updates so the user lands on the install action
-      // one tap after the notification. Registered here (not in the
-      // banner) because the notification can arrive when the banner
-      // isn't mounted — e.g. app was cold-started via the tap.
-      import('./lib/notifications.js').then(({ registerUpdateTapListener }) => {
-        registerUpdateTapListener(() => {
-          import('svelte-spa-router').then(({ push }) => push('/settings/updates'));
-        });
-      }).catch(() => { /* ignore */ });
-    } else {
+    if (!isNative) {
       // PWA: register the service worker via virtual:pwa-register so we
       // get onNeedRefresh callbacks. Without this, registerType:'prompt'
       // downloads new bundles but never tells the app they're ready.
-      import('./lib/pwa-update.js').then(({ registerPwaSw }) => registerPwaSw()).catch(() => {});
-    }
-
-    // Visibility-change trigger for BOTH update channels. A user who
-    // leaves the tab open for hours / a laptop that resumes from sleep
-    // gets a re-check the moment the tab regains focus — respecting the
-    // per-user cadence setting (Settings → Updates). The GitHub-tag
-    // check returns cached inside the cadence window; the PWA SW-file
-    // check just forces the browser to compare sw.js against what it
-    // registered (otherwise the browser only bothers every 24h).
-    if (typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState !== 'visible') return;
-        import('./lib/updates.js').then(({ checkForUpdate, getAutoCheck }) => {
-          if (!getAutoCheck()) return;
-          checkForUpdate({ force: false }).catch(() => {});
-        }).catch(() => {});
-        if (!isNative) {
-          import('./lib/pwa-update.js').then(({ checkForPwaUpdate }) => checkForPwaUpdate()).catch(() => {});
-        }
-      });
-    }
-
-    // Periodic PWA-bundle poll on the same cadence as the GitHub-tag
-    // check, so a tab that stays open all day still surfaces a fresh
-    // deploy without a full reload. Cadence honors the same
-    // updateCheckInterval setting; 0 (manual) disables the poll.
-    if (!isNative && typeof window !== 'undefined') {
-      Promise.all([
-        import('./lib/pwa-update.js'),
-        import('./stores/settings.js'),
-      ]).then(([{ checkForPwaUpdate }, { updateCheckInterval }]) => {
-        let _pwaPollTimer = null;
-        const _resetPoll = (hours) => {
-          if (_pwaPollTimer) clearInterval(_pwaPollTimer);
-          _pwaPollTimer = null;
-          const h = Number(hours) || 0;
-          if (!h) return; // manual only
-          _pwaPollTimer = setInterval(checkForPwaUpdate, h * 60 * 60 * 1000);
-        };
-        updateCheckInterval.subscribe(_resetPoll);
+      //
+      // A tab left open for hours, or a laptop resuming from sleep, also
+      // checks for a fresh bundle as soon as it regains focus (the browser
+      // only compares sw.js every 24h on its own), and every 4 hours.
+      import('./lib/pwa-update.js').then(({ registerPwaSw, checkForPwaUpdate }) => {
+        registerPwaSw();
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') checkForPwaUpdate();
+        });
+        setInterval(checkForPwaUpdate, PWA_POLL_MS);
       }).catch(() => {});
     }
 
@@ -862,7 +808,7 @@
 {:else if !accountReady}
   <!-- Checking the phone's copy is this account's: never another account's data (the confirm dialog is mounted below). -->
   {#if $accountGate.state === 'checking' || $accountGate.state === 'signing_out'}
-    <div class="account-check-wait" role="status" aria-label={$_('updates.checking')}>
+    <div class="account-check-wait" role="status" aria-label={$_('native_setup.checking')}>
       <span class="material-symbols-rounded account-check-spin" aria-hidden="true">progress_activity</span>
     </div>
   {:else if $accountGate.state === 'error'}

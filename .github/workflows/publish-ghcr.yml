@@ -1,8 +1,7 @@
 name: Publish fork image to GHCR
 
-# Fork-only. Upstream's docker.yml stays untouched (and disabled on the fork) so upstream
-# merges stay clean. This one publishes a linux/amd64 image to this fork's GHCR namespace on
-# every push to main; it does nothing on pull requests. No Docker Hub, no PAT: GITHUB_TOKEN only.
+# Publishes a linux/amd64 image to this repo's GHCR namespace on every push to main; it does
+# nothing on pull requests. No Docker Hub, no PAT: GITHUB_TOKEN only.
 #
 # Tags: the full commit SHA and `main`.
 on:

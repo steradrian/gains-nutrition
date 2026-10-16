@@ -164,47 +164,9 @@
     }
   },
   "updates": {
-    "interval": {
-      "every_12h": "A cada 12 horas",
-      "hourly": "A cada hora",
-      "every_4h": "A cada 4 horas",
-      "daily": "Dariamente",
-      "manual": "Manualmente"
-    },
-    "last_checked": "Ultima checagem",
-    "check_now": "Checar agora",
-    "checking": "Checando…",
-    "up_to_date": "Você esta na versão mais recente",
-    "available_headline": "{version} esta disponível",
-    "release_notes_heading": "Novidades",
-    "view_on_github": "Veja no GitHub",
-    "download_install": "Baixar e Instalar",
-    "install_downloaded": "Instalar",
-    "downloading": "Baixando... {percent}%",
-    "install_starting": "Abrindo instalador…",
-    "install_failed": "Falha na instalação. Tente novamente.",
-    "skip_this_version": "Pular essa Versão",
-    "banner_cta": "Click para ver as novidades e instalar.",
-    "banner_view": "Veja",
-    "available_generic": "Uma Nova Versão esta Disponível",
     "ready_headline": "Atualização Pronta",
     "ready_cta": "Recarregue para obter a ultima versão.",
-    "banner_reload": "Recarregar",
-    "storage": {
-      "clearing": "Limpando…",
-      "cleared": "Cache limpo."
-    },
-    "server": {
-      "heading": "Servidor",
-      "headline": "Atualização do servidor {lasted} disponível",
-      "behind_desc": "Atualização disponível: {lasted}",
-      "current_desc": "Você esta na ultima versão",
-      "versions": "Servidor na versão {current}. Ultima atualização: {lasted}.",
-      "available_chip": "Atualização Disponível",
-      "copy_command": "Copiar comando",
-      "copied": "Copiado para área de trabalho.",
-      "copy_failed": "Falha ao copiar, Copie o camando manualmente."
-    }
+    "banner_reload": "Recarregar"
   },
   "login": {
     "username": "Nome de Usuário",
@@ -334,10 +296,6 @@
     },
     "integrations": {
       "title": "Integrações"
-    },
-    "updates": {
-      "title": "Checar Atualizações",
-      "toggle": "Checar por atualizações automaticamente"
     },
     "summary": {
       "title": "Suas Metas Diárias"

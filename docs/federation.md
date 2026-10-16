@@ -1,8 +1,7 @@
-# TraceApps Federation API
+# Federation API
 
-A Bearer-authenticated REST API that NutriTrace exposes for sister apps
-in the TraceApps ecosystem (LiftTrace public, CookTrace in private
-development, plus any self-hosted custom integrations) to consume.
+A Bearer-authenticated REST API that NutriTrace exposes for companion apps
+(LiftTrace, CookTrace, plus any self-hosted custom integrations) to consume.
 
 This is an **internal cross-app contract**, not a public API for
 third-party developers. The wire format is stable across NT releases

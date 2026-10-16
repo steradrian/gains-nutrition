@@ -26,6 +26,6 @@ export function droppedCookieReason(status, opts = {}) {
 // Where "How to fix it" goes for each reason: the plain-HTTP page, or the
 // reverse-proxy guide when the page was secure and something else dropped it.
 export const COOKIE_HELP_URLS = {
-  http:    'https://traceapps.github.io/docs/getting-started/lan-http/',
-  dropped: 'https://traceapps.github.io/docs/getting-started/reverse-proxy/',
+  http:    'https://github.com/steradrian/gains-nutrition/blob/main/DEPLOY.md#environment-variables-reference',
+  dropped: 'https://github.com/steradrian/gains-nutrition/blob/main/DEPLOY.md#reverse-proxy-with-subpath',
 };

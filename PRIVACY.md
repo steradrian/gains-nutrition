@@ -38,7 +38,6 @@ NutriTrace is a self-hosted nutrition and wellness tracker. Your data is stored 
 
 NutriTrace connects to the following external services **only when you explicitly enable them**:
 
-- **GitHub.** Update checks, off until you turn them on: setup asks, and Settings, Updates can change it at any time. When on, your server asks github.com for the latest release every few hours, and the Android app asks for the latest app version, so you hear about new features, fixes and security updates. Nothing about you, your instance or your data is sent. Set `UPDATE_CHECK=off` to keep it off whatever the setting says.
 - **Open Food Facts.** Food product lookups by barcode or name. Subject to [OFF privacy policy](https://world.openfoodfacts.org/privacy). See [LICENSES.md](LICENSES.md) for ODbL attribution notes (including the opt-in local mirror obligations for multi-user operators).
 - **USDA FoodData Central.** Food nutrition lookups. Subject to [USDA privacy policy](https://www.usda.gov/privacy-policy).
 - **Mealie** (per user). Live queries against the user's own Mealie instance for recipe import. User provides URL + API token.
@@ -49,8 +48,8 @@ NutriTrace connects to the following external services **only when you explicitl
 - **OIDC providers (Authentik, Keycloak, Pocket-ID, Authelia, Google, Auth0, or any OIDC 1.0 provider).** If admins configure SSO, sign-in is delegated to your chosen identity provider. Client secrets are stored encrypted at rest.
 - **AI providers (Claude, OpenAI, Gemini, OpenAI-compatible).** If Trace is enabled, your conversation and relevant diary / wellness / goals context is sent to the provider you choose. Subject to their respective privacy policies. Your API key is stored on your server, not ours. The "OpenAI Compatible" provider (Ollama, LM Studio, LocalAI, vLLM, DeepSeek, Groq, and similar) connects directly from the browser to the endpoint you configure; the NutriTrace server never sees those requests in per-user mode.
 - **Push notification services (Apprise, Gotify, ntfy).** Optional. If configured, notification content (meal reminders, water reminders, weigh-in reminders, weekly summary, goal celebration, fasting-complete alert, wellness alerts, backup-failed alert) is sent to your self-hosted push server. Only one provider is active at a time.
-- **SMTP (email).** Optional. If configured, password reset emails, user invites, weekly summary emails, and food/meal share-notification emails are sent via your SMTP provider. See the [Email / SMTP docs](https://traceapps.github.io/docs/integrations/smtp/) for details.
-- **Sibling TraceApps (CookTrace, LiftTrace).** When you (or your operator) issues a Federation API token, the holding app can read food data (`read:foods`) or post workout entries (`write:workouts`) against your NutriTrace instance. Tokens are scoped, revocable, and never leave your NutriTrace server.
+- **SMTP (email).** Optional. If configured, password reset emails, user invites, weekly summary emails, and food/meal share-notification emails are sent via your SMTP provider.
+- **Companion apps (CookTrace, LiftTrace).** When you (or your operator) issues a Federation API token, the holding app can read food data (`read:foods`) or post workout entries (`write:workouts`) against your NutriTrace instance. Tokens are scoped, revocable, and never leave your NutriTrace server.
 
 ## Data Retention
 
@@ -65,7 +64,7 @@ Your data is retained on your server until you delete it. You can:
 
 The NutriTrace Android app stores data locally on your device in a SQLite database within the app's private data directory. When connected to a server, data syncs bidirectionally. The app requests the following permissions:
 
-- **Internet.** Server sync, food database lookups, AI chat, in-app updates
+- **Internet.** Server sync, food database lookups, AI chat
 - **Camera.** Food photos, Scan Label (AI OCR of nutrition labels), barcode scanning, Trace image attachments
 - **Notifications.** Meal reminders, hydration reminders, weigh-in reminders, goal celebrations, fasting-complete alerts, wellness alerts, backup-failed alerts
 - **Schedule / use exact alarm.** Precise reminder delivery via native WorkManager even when the app is backgrounded
@@ -93,4 +92,4 @@ We may update this privacy policy from time to time. Changes will be noted in th
 
 ## Contact
 
-For privacy questions, open an issue at [github.com/traceapps/nutritrace](https://github.com/traceapps/nutritrace/issues).
+For privacy questions, open an issue at [github.com/steradrian/gains-nutrition](https://github.com/steradrian/gains-nutrition/issues).

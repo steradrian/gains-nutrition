@@ -7,9 +7,7 @@
  *   3. readFileSync('./package.json')     — best-effort, resolved against
  *                                            process cwd. Works in dev and
  *                                            in Docker (WORKDIR /app).
- *   4. 'unknown'                          — safe fallback; the /server-status
- *                                            endpoint returns available=false
- *                                            when version isn't a real semver.
+ *   4. 'unknown'                          — safe fallback.
  *
  * Earlier iterations tried to import from `../../src/lib/version.js`, which
  * only exists in the source tree — not in the Docker runtime image, where

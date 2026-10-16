@@ -21,12 +21,6 @@ function _getLN() {
 }
 
 let _channelCreated = false;
-let _updateChannelCreated = false;
-let _updateTapListener = null;
-
-// Fixed ID for the "update available" notification so re-posts replace the
-// previous one instead of stacking. Any bumped version simply overwrites.
-export const UPDATE_NOTIFICATION_ID = 9999;
 
 /** Ensure the notification channel exists (Android requires this) */
 async function _ensureChannel() {
@@ -47,28 +41,6 @@ async function _ensureChannel() {
     _dlog('[notifications] channel created');
   } catch (e) {
     console.warn('[notifications] channel creation failed:', e.message);
-  }
-}
-
-// Silent "App updates" channel — low importance so it appears in the shade
-// without sound or vibration, matching how F-Droid / Play post update
-// notices. Separate channel means users can mute updates independently
-// from reminders in Android's per-channel notification settings.
-async function _ensureUpdateChannel() {
-  if (_updateChannelCreated || !isNative) return;
-  const LN = _getLN();
-  if (!LN) return;
-  try {
-    await LN.createChannel({
-      id: 'nutritrace-updates',
-      name: 'App updates',
-      description: 'Notifies you when a new app version is available.',
-      importance: 2, // LOW: no sound, no vibration, no heads-up
-      visibility: 1, // PUBLIC
-    });
-    _updateChannelCreated = true;
-  } catch (e) {
-    console.warn('[notifications] update channel creation failed:', e.message);
   }
 }
 
@@ -549,88 +521,4 @@ export async function cancelWeighInReminder() {
   const pending = await LN.getPending();
   const ids = pending.notifications.filter(n => n.id >= 4000 && n.id < 5000).map(n => ({ id: n.id }));
   if (ids.length) await LN.cancel({ notifications: ids });
-}
-
-// ── App-update notification ────────────────────────────────────────────────
-
-/** True when the OS-level notification permission is currently granted. */
-export async function isUpdateNotificationPermissionGranted() {
-  if (!isNative) return false;
-  const LN = _getLN();
-  if (!LN) return false;
-  try {
-    const perm = await LN.checkPermissions();
-    return perm.display === 'granted';
-  } catch { return false; }
-}
-
-/**
- * Post a silent "update available" notification. Uses the low-importance
- * `nutritrace-updates` channel so it lands in the shade without sound
- * or heads-up popup. Tapping the notification is handled by
- * `registerUpdateTapListener` — decoupled so the tap handler can navigate
- * the app without this module needing to know about routing.
- *
- * Returns true if the notification was posted, false otherwise (native
- * missing, permission denied, etc.). Silent-on-failure — the in-app
- * banner is the fallback.
- */
-export async function showUpdateNotification(latest) {
-  if (!isNative || !latest?.version) return false;
-  const LN = _getLN();
-  if (!LN) return false;
-  const perm = await LN.checkPermissions();
-  if (perm.display !== 'granted') return false;
-  await _ensureUpdateChannel();
-  try {
-    await LN.schedule({
-      notifications: [{
-        id: UPDATE_NOTIFICATION_ID,
-        channelId: 'nutritrace-updates',
-        title: 'NutriTrace update available',
-        body: `${latest.version} is ready. Tap to install.`,
-        // Extras ride along so the tap handler knows which version to
-        // install without re-fetching from GitHub.
-        extra: { version: latest.version, notesUrl: latest.notesUrl || '' },
-      }],
-    });
-    _dlog(`[notifications] update notification posted for ${latest.version}`);
-    return true;
-  } catch (e) {
-    console.warn('[notifications] update notification failed:', e?.message || e);
-    return false;
-  }
-}
-
-/** Clear a previously-posted update notification (e.g. after user installs). */
-export async function cancelUpdateNotification() {
-  if (!isNative) return;
-  const LN = _getLN();
-  if (!LN) return;
-  try {
-    await LN.cancel({ notifications: [{ id: UPDATE_NOTIFICATION_ID }] });
-  } catch { /* silent */ }
-}
-
-/**
- * Register a one-time listener for taps on the update notification.
- * `handler` receives { version, notesUrl } and is expected to route into
- * the install flow. Safe to call multiple times — subsequent calls no-op
- * so App.svelte can defensively register on every mount.
- */
-export async function registerUpdateTapListener(handler) {
-  if (!isNative || _updateTapListener) return;
-  const LN = _getLN();
-  if (!LN) return;
-  try {
-    _updateTapListener = await LN.addListener('localNotificationActionPerformed', ev => {
-      if (ev?.notification?.id !== UPDATE_NOTIFICATION_ID) return;
-      const extra = ev.notification.extra || {};
-      try { handler({ version: extra.version || '', notesUrl: extra.notesUrl || '' }); }
-      catch (e) { console.warn('[notifications] update tap handler threw:', e); }
-    });
-    _dlog('[notifications] update tap listener registered');
-  } catch (e) {
-    console.warn('[notifications] failed to register update tap listener:', e?.message || e);
-  }
 }

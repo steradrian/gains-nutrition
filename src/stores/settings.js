@@ -38,7 +38,6 @@ export const USER_PREFS = new Set([
   'foodsShowCategories','foodsShowLabels','foodsShowNotes','foodsShowThumbnails',
   'foodsShowYesterdayMeals','foodsYesterdayCollapsed','foodsSavedCollapsed','foodsSort','mealsSort','recipesSort',
   'foodsDefaultSource',
-  'updateCheckInterval', // hours between checks: 1, 4, 12, 24, or 0 for manual only
   'barcodeBeep','cropPhotos',
   'offEnabled','offSearchLanguage','offSearchCountry','offUploadCountry','offImportPortion',
   'weightUnit','heightUnit','lengthUnit','distUnit','tempUnit',
@@ -645,11 +644,6 @@ export const recipesSort            = createSettingStore('recipesSort',         
 // (requested via #128). Foods.svelte reads this on mount and initialises
 // searchSource from it.
 export const foodsDefaultSource     = createSettingStore('foodsDefaultSource',     'local');
-
-// Hours between automatic update checks. 0 = manual only (Settings →
-// Updates → Check now is the only way). Also gates the visibility-change
-// re-check trigger in App.svelte. #updates-cadence-settable.
-export const updateCheckInterval    = createSettingStore('updateCheckInterval',    4);
 
 export const barcodeBeep            = createSettingStore('barcodeBeep',            false);
 export const barcodeFlashlight      = createSettingStore('barcodeFlashlight',      false);
