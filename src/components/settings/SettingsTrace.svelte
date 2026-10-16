@@ -395,7 +395,7 @@
               • <em>{$_('settings_trace.labels.trigger_yesterday')}</em>
             </div>
             <div style="margin-top:8px">
-              <a href="https://github.com/traceapps/nutritrace#smart-log--voice--ai-food-logging" target="_blank" rel="noopener" class="about-link">{$_('settings_trace.labels.smart_log_readme')}</a>
+              <a href="https://github.com/steradrian/gains-nutrition#smart-log--voice--ai-food-logging" target="_blank" rel="noopener" class="about-link">{$_('settings_trace.labels.smart_log_readme')}</a>
             </div>
           </div>
         </div>

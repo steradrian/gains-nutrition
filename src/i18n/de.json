@@ -320,9 +320,6 @@
     "diagnostics": {
       "section": "Diagnose"
     },
-    "updates": {
-      "section": "Updates"
-    },
     "api_tokens": {
       "section": "API-Tokens"
     },
@@ -331,80 +328,12 @@
     },
     "about": {
       "section": "Über NutriTrace"
-    },
-    "support": {
-      "section": "Unterstützung"
     }
   },
   "updates": {
-    "current_version": "Aktuelle Version",
-    "channel": {
-      "label": "Update-Kanal",
-      "stable": "Stable (Stabil)",
-      "dev": "Dev (Entwicklung)",
-      "help": "Stable folgt offiziell freigegebenen Versionen. Dev ist der fortlaufende Entwicklungsstand; es können Fehler auftreten."
-    },
-    "auto_check": "Automatisch nach Updates suchen",
-    "auto_check_desc": "Im Hintergrund nach neuen Versionen suchen.",
-    "interval": {
-      "label": "Suchhäufigkeit",
-      "desc": "Wie oft die geöffnete App nach neuen Versionen sucht. „Nur manuell“ schaltet alle automatischen Prüfungen ab.",
-      "hourly": "Stündlich",
-      "every_4h": "Alle 4 Stunden",
-      "every_12h": "Alle 12 Stunden",
-      "daily": "Einmal täglich",
-      "manual": "Nur manuell"
-    },
-    "last_checked": "Zuletzt gesucht",
-    "last_checked_never": "Nie",
-    "check_now": "Jetzt prüfen",
-    "checking": "Wird gesucht…",
-    "check_failed": "Update-Prüfung fehlgeschlagen. Bitte gleich erneut versuchen.",
-    "up_to_date": "Du nutzt die neueste Version",
-    "available_headline": "{version} ist verfügbar",
-    "released": "Veröffentlicht {when}",
-    "release_notes_heading": "Neuerungen",
-    "no_release_notes": "Für diese Version wurden keine Versionshinweise veröffentlicht.",
-    "view_on_github": "Auf GitHub ansehen",
-    "download_install": "Herunterladen & installieren",
-    "downloading": "Wird heruntergeladen… {percent}%",
-    "install_starting": "Installationsprogramm wird geöffnet…",
-    "install_failed": "Installation fehlgeschlagen. Bitte erneut versuchen.",
-    "skip_this_version": "Diese Version überspringen",
-    "no_apk_asset": "Dieser Version ist keine APK-Datei angehängt.",
-    "banner_cta": "Tippen, um Neuerungen anzusehen und zu installieren.",
-    "banner_view": "Ansehen",
-    "available_generic": "Eine neue Version ist verfügbar",
-    "banner_reload": "Neu laden",
-    "storage": {
-      "heading": "Zwischengespeicherte Update-APKs",
-      "empty": "Keine zwischengespeicherten APKs. Bereinigung war erfolgreich.",
-      "clear_now": "Jetzt bereinigen",
-      "clearing": "Wird bereinigt…",
-      "cleared": "Cache geleert."
-    },
-    "server": {
-      "heading": "Server",
-      "headline": "Server-Update {latest} verfügbar",
-      "behind_desc": "Update verfügbar: {latest}",
-      "current_desc": "Du nutzt die neueste Version",
-      "versions": "Server läuft auf {current}. Neueste Version: {latest}.",
-      "available_chip": "Update verfügbar",
-      "instructions": "Um den Server zu aktualisieren, führe auf dem Host-Rechner aus:",
-      "copy_command": "Befehl kopieren",
-      "copied": "In die Zwischenablage kopiert.",
-      "copy_failed": "Kopieren fehlgeschlagen. Bitte kopiere den Befehl manuell.",
-      "view_notes": "Versionshinweise ansehen",
-      "channel_note": "Um den Server-Kanal zu wechseln, passe das Image-Tag in deiner docker-compose.yml an (:latest, :dev) und führe docker-compose pull && docker-compose up -d aus."
-    },
-    "off_resting": "Deaktiviert. Dein Server verbindet sich nicht mit GitHub. Aktiviere dies, um über neue Funktionen, Fehlerbehebungen und Sicherheitsupdates informiert zu werden.",
-    "off_notice_title": "Update-Prüfungen sind deaktiviert",
-    "off_notice": "Du wirst nicht über neue Funktionen, Fehlerbehebungen oder Sicherheitsupdates benachrichtigt. Bei Aktivierung fragt dein Server alle paar Stunden bei GitHub nach der neuesten Version; dabei werden keinerlei persönliche Daten übertragen.",
-    "turn_on": "Aktivieren",
-    "not_now": "Nicht jetzt",
-    "install_downloaded": "Installieren",
     "ready_headline": "Update bereit",
-    "ready_cta": "Neu laden, um die neueste Version zu nutzen."
+    "ready_cta": "Neu laden, um die neueste Version zu nutzen.",
+    "banner_reload": "Neu laden"
   },
   "login": {
     "subtitle": "Melde dich bei deinem Konto an",
@@ -632,13 +561,6 @@
       "desc": "Du kannst deine Ziele, Einheiten und Integrationen jederzeit in den <strong>Einstellungen</strong> einrichten. Bis dahin werden deine Kalorienziele nicht automatisch berechnet.",
       "continue": "Einrichtung fortsetzen",
       "skip_now": "Vorerst überspringen"
-    },
-    "updates": {
-      "title": "Nach Updates suchen",
-      "desc": "Dein Server kann dich benachrichtigen, wenn eine neue Version von NutriTrace verfügbar ist.",
-      "toggle": "Automatisch nach Updates suchen",
-      "toggle_sub": "So erfährst du von neuen Funktionen, Fehlerbehebungen und Sicherheitsupdates",
-      "note": "Dein Server fragt alle paar Stunden bei GitHub an, ob eine neuere Version von NutriTrace verfügbar ist. Dabei werden keinerlei Daten über dich übertragen. Du kannst dies jederzeit unter Einstellungen → Updates ändern."
     }
   },
   "diary": {
@@ -1142,7 +1064,7 @@
   "settings_diagnostics": {
     "diag_mode": "Diagnosemodus",
     "view_logs": "Diagnose-Protokolle ansehen",
-    "logs_desc_web": "Aktuelle Protokollzeilen aus der App-Konsole. Nützlich für Fehlerberichte; kopiere oder teile sie in einem <a href=\"https://github.com/traceapps/nutritrace/issues\" target=\"_blank\" rel=\"noopener\" class=\"about-link\">GitHub-Issue</a>.",
+    "logs_desc_web": "Aktuelle Protokollzeilen aus der App-Konsole. Nützlich für Fehlerberichte; kopiere oder teile sie in einem <a href=\"https://github.com/steradrian/gains-nutrition/issues\" target=\"_blank\" rel=\"noopener\" class=\"about-link\">GitHub-Issue</a>.",
     "logs_desc_android": " Auf Android mit aktiviertem Diagnosemodus kannst du auch die gespeicherte Protokolldatei oder erfasste Absturzberichte teilen.",
     "logs_note": "Es wird nichts automatisch übertragen.",
     "calibration_export": "Kalibrierungs-Export",
@@ -1156,9 +1078,10 @@
     "server_from": "Server:",
     "server_open_source": "Open Source",
     "server_license": "(AGPL-3.0)",
-    "translations_from": "Übersetzungen ermöglicht durch",
-    "family_line_prefix": "Teil der ",
-    "family_line_suffix": " -Familie"
+    "based_on": "Based on",
+    "based_on_project": "NutriTrace by TraceApps",
+    "based_on_license": "(AGPL-3.0), modified",
+    "translations_credit": "Translations: original NutriTrace contributors via Weblate"
   },
   "settings_merge": {
     "title": "Synchronisations-Optionen",
@@ -1822,7 +1745,7 @@
       "copied": "Token in Zwischenablage kopiert",
       "copy_failed": "Kopieren fehlgeschlagen. Bitte manuell auswählen und kopieren."
     },
-    "intro_before": "Bearer-Tokens für verbundene TraceApps (LiftTrace, CookTrace",
+    "intro_before": "Bearer-Tokens für Begleit-Apps (LiftTrace, CookTrace",
     "intro_middle": ") oder andere autorisierte Integrationen, um deine Daten über die Federation-API zu lesen oder zu schreiben unter",
     "intro_dev": "(in Entwicklung)",
     "intro_see": "Siehe",
@@ -2321,16 +2244,6 @@
       "username_required": "Benutzername ist erforderlich",
       "failed": "Konto konnte nicht erstellt werden"
     }
-  },
-  "settings_support": {
-    "lead": "NutriTrace ist kostenlos und wird es immer bleiben. Unterstützung ist freiwillig und schaltet keine Funktionen frei.",
-    "other_ways": "Weitere Möglichkeiten zu helfen",
-    "star": "Stern auf GitHub vergeben",
-    "star_desc": "Sterne helfen dabei, dass selbst gehostete Projekte gefunden werden.",
-    "report_bug": "Fehler melden",
-    "report_bug_desc": "Ein genauer Fehlerbericht hilft allen, die auf dasselbe Problem stoßen.",
-    "translate": "Beim Übersetzen helfen",
-    "translate_desc": "Hilf mit, NutriTrace auf Weblate in deiner Sprache verfügbar zu machen."
   },
   "attach_image": {
     "button": "Foto hinzufügen",

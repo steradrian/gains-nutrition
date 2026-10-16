@@ -8,6 +8,12 @@ This file lists them so operators and contributors know what applies to what.
 
 - **NutriTrace** — AGPL-3.0 (see [LICENSE](LICENSE)). Applies to the entire
   codebase in this repository including the Android app source.
+- **Fork notice.** This project is a modified version of
+  [NutriTrace](https://github.com/TraceApps/nutritrace). The original work is
+  Copyright its authors (TraceApps) and is licensed under AGPL-3.0. It has been
+  modified by the Gains project; the modified source is available at
+  <https://github.com/steradrian/gains-nutrition>. The translations originate
+  from the original NutriTrace contributors via Weblate.
 
 ## Data sources
 

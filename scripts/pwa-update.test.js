@@ -40,8 +40,19 @@ test('the registration is kept, because nothing else can ask for a check', () =>
 
 test('the banner does not tell a web user to install anything', () => {
   // A page cannot install a release; it can reload a bundle it already has.
-  assert.match(banner, /\{#if \$pwaUpdateReady\}\s*\n\s*\{\$_\('updates\.ready_headline'/);
-  assert.match(banner, /\$pwaUpdateReady\s*\n?\s*\? \$_\('updates\.ready_cta'/);
+  assert.match(banner, /\$_\('updates\.ready_headline'\)/);
+  assert.match(banner, /\$_\('updates\.ready_cta'\)/);
+});
+
+test('the banner only ever shows for a waiting bundle, and Reload applies it', () => {
+  assert.match(banner, /\{#if \$pwaUpdateReady && !dismissed\}/);
+  assert.match(banner, /on:click=\{applyPwaUpdate\}/);
+});
+
+test('a worker check runs on focus and on a timer, on the web only', () => {
+  const app = read('../src/App.svelte');
+  assert.match(app, /if \(document\.visibilityState === 'visible'\) checkForPwaUpdate\(\)/);
+  assert.match(app, /setInterval\(checkForPwaUpdate, PWA_POLL_MS\)/);
 });
 
 test('both strings exist in English', () => {

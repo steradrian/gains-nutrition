@@ -1,16 +1,16 @@
 # Public REST API
 
 General-purpose REST routes under `/api/v1`, for your own scripts and
-automations that want plain JSON over HTTP, rather than the [Model
-Context Protocol](https://traceapps.github.io/docs/nutritrace/mcp/)
+automations that want plain JSON over HTTP, rather than the Model
+Context Protocol
 NutriTrace also speaks. Off by default. Pull-based, if you want to be
 notified the instant something happens instead of polling, see
 [outgoing webhooks](webhooks.md).
 
 This is distinct from the [Federation API](federation.md): federation
 (`/api/v1/foods`, `/api/v1/workouts`, `/api/v1/activity`,
-`/api/v1/body-measurements`) is a stable wire contract for sister
-TraceApps and is always on. The routes on this page
+`/api/v1/body-measurements`) is a stable wire contract for companion
+apps and is always on. The routes on this page
 (`/api/v1/diary`, `/api/v1/goals`, `/api/v1/meals`, `/api/v1/steps`,
 `/api/v1/body-composition`, `/api/v1/profile`) are for a user's own personal automation and are
 gated behind the flags below.

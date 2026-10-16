@@ -177,7 +177,7 @@
       <p class="sub-label" style="padding:0 0 6px">
         {$_('settings_api_tokens.intro_before')} <em>{$_('settings_api_tokens.intro_dev')}</em>){$_('settings_api_tokens.intro_middle')}
         <code>/api/v1/</code>. {$_('settings_api_tokens.intro_see')}
-        <a href="https://github.com/traceapps/nutritrace/blob/main/docs/federation.md" target="_blank" rel="noopener">docs/federation.md</a>.
+        <a href="https://github.com/steradrian/gains-nutrition/blob/main/docs/federation.md" target="_blank" rel="noopener">docs/federation.md</a>.
       </p>
 
       {#if justCreatedRaw}

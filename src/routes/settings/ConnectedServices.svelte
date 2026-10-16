@@ -617,7 +617,7 @@
             <a href="https://opendatacommons.org/licenses/odbl/1-0/" target="_blank" rel="noopener" class="about-link">Open Database License (ODbL)</a>.
             If you serve other users from this instance, share-alike
             obligations apply to your operation. See
-            <a href="https://github.com/TraceApps/nutritrace/blob/main/LICENSES.md" target="_blank" rel="noopener" class="about-link">LICENSES.md</a>
+            <a href="https://github.com/steradrian/gains-nutrition/blob/main/LICENSES.md" target="_blank" rel="noopener" class="about-link">LICENSES.md</a>
             for details.
           </div>
         </div>

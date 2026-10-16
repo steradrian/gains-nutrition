@@ -61,7 +61,7 @@ test('the warning has its words and points at the fix', () => {
     assert.ok(en.login.cookie_warning[k], k);
   }
   assert.match(en.login.cookie_warning.http_body, /INSECURE_COOKIES=1/);
-  assert.equal(COOKIE_HELP_URLS.http, 'https://traceapps.github.io/docs/getting-started/lan-http/');
-  assert.equal(COOKIE_HELP_URLS.dropped, 'https://traceapps.github.io/docs/getting-started/reverse-proxy/');
+  assert.equal(COOKIE_HELP_URLS.http, 'https://github.com/steradrian/gains-nutrition/blob/main/DEPLOY.md#environment-variables-reference');
+  assert.equal(COOKIE_HELP_URLS.dropped, 'https://github.com/steradrian/gains-nutrition/blob/main/DEPLOY.md#reverse-proxy-with-subpath');
   assert.match(read('../src/components/ui/CookieWarning.svelte'), /href=\{COOKIE_HELP_URLS\[reason\] \|\| COOKIE_HELP_URLS\.http\}/);
 });

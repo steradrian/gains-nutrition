@@ -66,7 +66,7 @@
       </div>
       <div class="setting-divider"></div>
       <p class="setting-desc" style="padding:8px var(--page-px);line-height:1.5">
-        {$_('settings_goals.adaptive_note')} <a href="https://github.com/TraceApps/nutritrace#adaptive-tdee" target="_blank" rel="noopener" class="about-link">{$_('settings_goals.how_it_works')}</a>
+        {$_('settings_goals.adaptive_note')} <a href="https://github.com/steradrian/gains-nutrition#adaptive-tdee" target="_blank" rel="noopener" class="about-link">{$_('settings_goals.how_it_works')}</a>
       </p>
     {/if}
   </div>

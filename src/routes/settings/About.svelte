@@ -46,20 +46,17 @@
     <div class="setting-divider"></div>
     <div class="about-row">
       <span class="material-symbols-rounded about-feat-icon">code</span>
-      <span>{$_('settings_about.server_from')} <a href="https://github.com/traceapps/nutritrace" target="_blank" rel="noopener" class="about-link">{$_('settings_about.server_open_source')}</a> {$_('settings_about.server_license')}</span>
+      <span>{$_('settings_about.server_from')} <a href="https://github.com/steradrian/gains-nutrition" target="_blank" rel="noopener" class="about-link">{$_('settings_about.server_open_source')}</a> {$_('settings_about.server_license')}</span>
     </div>
     <div class="setting-divider"></div>
     <div class="about-row">
-      <span class="material-symbols-rounded about-feat-icon">apps</span>
-      <span>{$_('settings_about.family_line_prefix')}<a href="https://traceapps.github.io/docs/" target="_blank" rel="noopener" class="about-link">TraceApps</a>{$_('settings_about.family_line_suffix')}</span>
+      <span class="material-symbols-rounded about-feat-icon">gavel</span>
+      <span>{$_('settings_about.based_on')} <a href="https://github.com/TraceApps/nutritrace" target="_blank" rel="noopener" class="about-link">{$_('settings_about.based_on_project')}</a> {$_('settings_about.based_on_license')}</span>
     </div>
     <div class="setting-divider"></div>
-    <!-- Weblate credit line (Libre plan attribution). Passive callout —
-         users who care about translations can follow through to help;
-         everyone else just reads it as a credit. -->
     <div class="about-row">
       <span class="material-symbols-rounded about-feat-icon">translate</span>
-      <span>{$_('settings_about.translations_from')} <a href="https://hosted.weblate.org/engage/nutritrace/" target="_blank" rel="noopener" class="about-link">Weblate</a></span>
+      <span>{$_('settings_about.translations_credit')}</span>
     </div>
     <div class="setting-divider"></div>
     <div class="about-desc" style="font-size:11px;color:var(--text-3);line-height:1.5">

@@ -76,8 +76,8 @@ export function registerPwaSw() {
  *
  * Without this a tab left open all day never notices a deploy: the browser
  * re-reads the worker on navigation, or every 24 hours, whichever comes
- * first. Called on the same cadence as the release check and when the tab
- * comes back to the front (see App.svelte).
+ * first. Called every few hours and when the tab comes back to the front
+ * (see App.svelte).
  */
 export async function checkForPwaUpdate() {
   if (isNative) return;

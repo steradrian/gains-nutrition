@@ -40,7 +40,6 @@ import apiV1Routes      from './routes/api/v1/index.js';
 import mcpRoutes        from './routes/mcp.js';
 import nutritionImportRoutes from './routes/nutrition-import.js';
 import offLocalRoutes from './routes/off-local.js';
-import updatesRoutes  from './routes/updates.js';
 import { logger }   from './logger.js';
 import { authenticate, hasAdminRole, userMgmtActive } from './middleware/auth.js';
 import { csrfProtect } from './middleware/csrf.js';
@@ -54,7 +53,6 @@ import {
 } from './middleware/request-logging.js';
 import { seedSmtpFromEnv } from './email.js';
 import { seedAiFromEnv } from './ai.js';
-import { initUpdateCheckSetting } from './lib/update-check.js';
 import { seedOidcFromEnv } from './lib/oidc-env.js';
 import { APP_VERSION } from './routes/version-source.js';
 
@@ -66,8 +64,6 @@ import { applyTrustProxy } from './lib/trust-proxy.js';
 // Seed config from env vars if provided (env vars take priority over UI)
 seedSmtpFromEnv();
 seedAiFromEnv();
-// Update checks: existing instances keep checking, fresh ones wait for setup to ask.
-initUpdateCheckSetting();
 seedOidcFromEnv();
 
 const app  = express();
@@ -274,7 +270,6 @@ router.use('/api/cooktrace',  cooktraceRoutes);
 router.use('/api/settings',  settingsRoutes);
 router.use('/api/app-config',  appConfigRoutes);
 router.use('/api/off-local',   offLocalRoutes);
-router.use('/api/updates',     updatesRoutes);
 router.use('/api/ai',          aiRoutes);
 router.use('/api/full-backup',        fullBackupRoutes);
 // Per-IP rate limit on OAuth callbacks — these run unauthenticated and trigger
@@ -465,7 +460,7 @@ app.listen(PORT, async () => {
     if (r.hub) {
       logger.warn(`[claim] ${r.rows} row(s) from single-user mode are unowned. Behind a hub they are not adopted automatically; the owner claims them with: node scripts/link-hub-user.js --user <you> --sub <hub id> --claim-anonymous`);
     } else if (r.ambiguous) {
-      logger.warn(`[claim] ${r.rows} row(s) from single-user mode are unowned, but this instance has more than one account so they cannot be attributed automatically. See https://traceapps.github.io/docs/auth/local-users/`);
+      logger.warn(`[claim] ${r.rows} row(s) from single-user mode are unowned, but this instance has more than one account so they cannot be attributed automatically.`);
     } else if (r.rows) {
       logger.info(`[claim] adopted ${r.rows} row(s) left over from single-user mode into user ${r.repaired}`);
     }

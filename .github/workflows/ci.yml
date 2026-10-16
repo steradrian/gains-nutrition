@@ -1,8 +1,8 @@
 name: Checks
 
-# The repo's other workflow (docker.yml) builds and publishes images; keeping
-# checks separate means a red check never blocks an image push and a slow
-# multi-arch build never delays PR feedback.
+# The repo's other workflow (publish-ghcr.yml) builds and publishes the image;
+# keeping checks separate means a red check never blocks an image push and a
+# slow image build never delays PR feedback.
 on:
   pull_request:
   push:

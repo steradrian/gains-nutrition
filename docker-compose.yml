@@ -1,6 +1,6 @@
 services:
   nutritrace:
-    image: ghcr.io/traceapps/nutritrace:latest
+    image: ghcr.io/steradrian/gains-nutrition:main
     container_name: nutritrace
     ports:
       - "3001:3001"

@@ -1,5 +1,5 @@
 /**
- * /api/v1 — federation API for sister TraceApps and other authorized
+ * /api/v1 — federation API for companion apps and other authorized
  * integrations. Bearer-token auth, per-token rate limit, scope-gated
  * endpoints. See docs/federation.md for the wire contract.
  */
