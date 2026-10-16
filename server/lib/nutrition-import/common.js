@@ -21,6 +21,7 @@
  * mapping `mealIndex` against the user's `mealNames` setting and writing the
  * final NutriTrace diary item shape.
  */
+import { isCalendarDate } from '../mcp/_util.js';
 
 // ── CSV parsing ──────────────────────────────────────────────────────────
 
@@ -160,9 +161,10 @@ function _fmt(y, mo, d) {
   const Y = String(y).padStart(4, '0');
   const M = String(mo).padStart(2, '0');
   const D = String(d).padStart(2, '0');
-  // sanity check
-  if (Number(M) < 1 || Number(M) > 12 || Number(D) < 1 || Number(D) > 31) return null;
-  return `${Y}-${M}-${D}`;
+  // A day that exists in that month and year: no 31 April, no 29 February
+  // in a common year.
+  const date = `${Y}-${M}-${D}`;
+  return isCalendarDate(date) ? date : null;
 }
 
 /**
