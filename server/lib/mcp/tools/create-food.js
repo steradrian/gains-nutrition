@@ -17,6 +17,7 @@ import { z } from 'zod';
 import db from '../../../db.js';
 import { toolResult, toolError } from '../_util.js';
 import { resolveNewItemVisibility } from '../../default-visibility.js';
+import { cleanText } from '../../clean-text.js';
 import { NUTRIMENTS } from '../../../../src/lib/nutrition.js';
 
 // Derived from the canonical NUTRIMENTS registry so this tool can never
@@ -79,8 +80,10 @@ export function registerCreateFood(server, { userId }) {
         );
       }
 
-      const cleanName = name.trim();
-      const cleanBrand = brand?.trim() || null;
+      // Control characters are dropped from the text a person sees (lib/clean-text.js).
+      const cleanName = cleanText(name).trim();
+      const cleanBrand = brand ? cleanText(brand).trim() || null : null;
+      const cleanCategory = category ? cleanText(category).trim() || null : null;
       if (!cleanName) return toolError('name is required and cannot be blank.');
 
       // Filter nutrition to known keys with finite values. Silent drop
@@ -143,7 +146,7 @@ export function registerCreateFood(server, { userId }) {
         portion,
         unit,
         JSON.stringify(clean),
-        category || null,
+        cleanCategory,
         barcode || null,
         notes || null,
         vis,
@@ -158,7 +161,7 @@ export function registerCreateFood(server, { userId }) {
           portion,
           unit,
           nutrition: clean,
-          category: category || null,
+          category: cleanCategory,
           barcode: barcode || null,
         },
         rejected_nutriments: rejected.length ? rejected : undefined,

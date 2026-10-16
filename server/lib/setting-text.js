@@ -7,15 +7,17 @@
  * other C0 control characters included, and a NUL in a name is stored,
  * returned and written into every place the name is used.
  *
- * On write, the settings route strips U+0000 to U+001F from these. Nothing
- * else is touched: letters of every script, accents, emoji (a category's
- * `label` is one) and spaces all stay. A name that is nothing but control
- * characters would be stripped to an empty name, which is worse than the
- * one that was sent, so that write is refused instead.
+ * On write, the settings route, the Android sync push and the backup restore
+ * clean these (lib/clean-text.js). Nothing else is touched: letters of every
+ * script, accents, emoji (a category's `label` is one) and spaces all stay. A
+ * name that is nothing but control characters would be cleaned to an empty
+ * name, which is worse than the one that was sent, so that write is refused
+ * instead (the sync push and the restore leave that one setting out).
  *
  * Only the four settings below, and only the strings inside them: other
  * settings (a prompt, a note) legitimately hold a newline or a tab.
  */
+import { cleanText, controlOnly } from './clean-text.js';
 
 // What each is: mealNames is ['Breakfast', ...]; foodCategories holds a
 // string or { name, label }; customUnits is [{ abbr, full }]; customNutriments
@@ -23,18 +25,18 @@
 // it (a custom nutrient's id is made from its label), so every string is cleaned.
 export const TEXT_SETTING_KEYS = new Set(['mealNames', 'foodCategories', 'customUnits', 'customNutriments']);
 
-// C0: U+0000 to U+001F (so tab, newline and carriage return too: none of these is a multi-line field).
-const C0 = /[\u0000-\u001f]/g;
+// What a name may contain is decided in clean-text.js, for every write path: a tab becomes a
+// space, the other C0 characters (newline and carriage return too: none of these is a multi-line
+// field) are dropped.
 const MAX_DEPTH = 4;
 
 class OnlyControl extends Error {}
 
 function clean(v, depth) {
   if (typeof v === 'string') {
-    const out = v.replace(C0, '');
     // Something was sent and nothing is left of it.
-    if (v.length > 0 && out.trim() === '' && out !== v) throw new OnlyControl();
-    return out;
+    if (controlOnly(v)) throw new OnlyControl();
+    return cleanText(v);
   }
   if (depth >= MAX_DEPTH) return v;
   if (Array.isArray(v)) return v.map(x => clean(x, depth + 1));
@@ -59,4 +61,20 @@ export function cleanTextSetting(key, value) {
     if (e instanceof OnlyControl) return { error: `${key} has a name made only of control characters` };
     throw e;
   }
+}
+
+/**
+ * The same for a value as it sits in user_settings (a JSON string), which is
+ * what a backup holds. A value that is not JSON is returned as it came, for
+ * whoever reads it to deal with, as before.
+ */
+export function cleanStoredTextSetting(key, stored) {
+  if (!TEXT_SETTING_KEYS.has(key) || typeof stored !== 'string') return { value: stored };
+  let parsed;
+  try { parsed = JSON.parse(stored); } catch { return { value: stored }; }
+  const text = cleanTextSetting(key, parsed);
+  if (text.error) return text;
+  const cleaned = JSON.stringify(text.value);
+  // Nothing to clean: the stored text, byte for byte.
+  return { value: cleaned === JSON.stringify(parsed) ? stored : cleaned };
 }

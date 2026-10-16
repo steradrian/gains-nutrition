@@ -124,11 +124,12 @@ test('the save routes hand the merge the client list as sent, so it can see echo
 
 test('every server path that writes diary items stores a uuid', () => {
   const write = read('../server/lib/mcp/_diary-write.js');
-  assert.match(write, /next\.items = ensureUuids\(next\.items \?\? \[\]\);/);
+  // The items also lose control characters from their names (lib/clean-text.js), after the uuids.
+  assert.match(write, /next\.items = cleanItemNames\(ensureUuids\(next\.items \?\? \[\]\)\);/);
   assert.match(write, /next\.water = ensureUuids\(next\.water \?\? \[\]\);/);
-  assert.match(read('../server/routes/nutrition-import.js'), /JSON\.stringify\(ensureUuids\(nextItems\)\)/);
+  assert.match(read('../server/routes/nutrition-import.js'), /JSON\.stringify\(cleanItemNames\(ensureUuids\(nextItems\)\)\)/);
   const data = read('../server/routes/data.js');
-  assert.match(data, /JSON\.stringify\(ensureUuids\(e\.items \|\| \[\]\)\)/);
+  assert.match(data, /JSON\.stringify\(cleanItemNames\(ensureUuids\(e\.items \|\| \[\]\)\)\)/);
   assert.match(data, /JSON\.stringify\(ensureUuids\(e\.water \|\| \[\]\)\)/);
 });
 

@@ -11,9 +11,12 @@ import { logger } from '../logger.js';
 import { ownerOrOptIn } from '../lib/outbound-policy.js';
 import { trustedServiceOrigins } from '../lib/service-origins.js';
 import { cleanCreateKey, findByCreateKey, setCreateKey } from '../lib/create-keys.js';
+import { cleanName, controlOnly } from '../lib/clean-text.js';
 
 const router = Router();
 router.use(requireAuth);
+
+const NAME_CONTROL_ONLY = 'Name cannot be only control characters';
 
 /** Current user's id, or null in single-user mode */
 const uid = req => userMgmtActive() ? req.user.id : null;
@@ -84,10 +87,13 @@ function _normalizeDensity(v) {
 
 // ── POST / ────────────────────────────────────────────────────────────────
 router.post('/', wrap(async (req, res) => {
-  const { name, brand, nutrition, portion, unit, img_url, notes, category, barcode, visibility, source_id,
+  const { name: rawName, brand: rawBrand, nutrition, portion, unit, img_url, notes, category: rawCategory, barcode, visibility, source_id,
     nutrition_basis, alt_units, density_g_ml,
     source_app, source_external_id, source_url } = req.body;
-  if (!name) return res.status(400).json({ error: 'Name required' });
+  if (!rawName) return res.status(400).json({ error: 'Name required' });
+  if (controlOnly(rawName)) return res.status(400).json({ error: NAME_CONTROL_ONLY });
+  // Control characters are dropped from the name, brand and category (lib/clean-text.js).
+  const name = cleanName(rawName), brand = cleanName(rawBrand), category = cleanName(rawCategory);
   const u = uid(req);
   // Sent again (a retry, or the answer was lost): the food made the first time.
   const createKey = cleanCreateKey(req.body.client_key);
@@ -175,10 +181,12 @@ router.post('/', wrap(async (req, res) => {
 router.put('/:id', wrap(async (req, res) => {
   const u = uid(req);
   const existing = db.prepare('SELECT * FROM foods WHERE id = ?').get(req.params.id);
-  if (!existing) return res.status(404).json({ error: 'Not found' });
-  if (u != null && existing.user_id !== u) return res.status(403).json({ error: 'Forbidden' });
-  const { name, brand, nutrition, portion, unit, img_url, notes, category, barcode, visibility, favorite,
+  // Another account's food is a 404, like one that is not there: a 403 told the caller which ids exist.
+  if (!existing || (u != null && existing.user_id !== u)) return res.status(404).json({ error: 'Not found' });
+  const { name: rawName, brand: rawBrand, nutrition, portion, unit, img_url, notes, category: rawCategory, barcode, visibility, favorite,
     nutrition_basis, alt_units, density_g_ml } = req.body;
+  if (controlOnly(rawName)) return res.status(400).json({ error: NAME_CONTROL_ONLY });
+  const name = cleanName(rawName), brand = cleanName(rawBrand), category = cleanName(rawCategory);
   // For img_url: undefined → keep existing, null/'' → explicit clear,
   // any other value → localize-if-external-or-data-URL-then-store. Without
   // this distinction, the X-remove-photo button in FoodEditor doesn't
@@ -212,16 +220,20 @@ router.put('/:id', wrap(async (req, res) => {
 // idempotent, increments by 1 each call. last_used_at uses the diary date
 // from the request body (or today if missing) so historical add-to-diary
 // flows backfill correctly.
+// Owner only, as POST /api/meals/:id/used: the counter and the time are the owner's own record of
+// using the food, so another account (who can read a shared food) never changes them, and a food
+// that is not the caller's is a 404 whether it is shared, private or not there at all. A 403 for
+// a private one and a 200 for a shared one told anyone which food ids exist and which are private.
+// Single-user mode has no owner: the rows with no user.
 router.post('/:id/used', wrap((req, res) => {
-  const u = uid(req);
-  const food = db.prepare('SELECT * FROM foods WHERE id = ?').get(req.params.id);
+  const u = uid(req) ?? null;
+  const food = db.prepare('SELECT id FROM foods WHERE id = ? AND user_id IS ?').get(req.params.id, u);
   if (!food) return res.status(404).json({ error: 'Not found' });
-  if (u != null && !canRead(food, u)) return res.status(403).json({ error: 'Forbidden' });
   const date = (req.body?.date && /^\d{4}-\d{2}-\d{2}$/.test(req.body.date))
     ? req.body.date
     : new Date().toISOString().slice(0, 10);
-  db.prepare(`UPDATE foods SET usage_count = usage_count + 1, last_used_at = MAX(COALESCE(last_used_at, ''), ?), updated_at = datetime('now') WHERE id = ?`)
-    .run(date, req.params.id);
+  db.prepare(`UPDATE foods SET usage_count = usage_count + 1, last_used_at = MAX(COALESCE(last_used_at, ''), ?), updated_at = datetime('now') WHERE id = ? AND user_id IS ?`)
+    .run(date, req.params.id, u);
   res.json({ ok: true });
 }));
 
@@ -229,8 +241,8 @@ router.post('/:id/used', wrap((req, res) => {
 router.delete('/:id', wrap((req, res) => {
   const u = uid(req);
   const existing = db.prepare('SELECT * FROM foods WHERE id = ?').get(req.params.id);
-  if (!existing) return res.status(404).json({ error: 'Not found' });
-  if (u != null && existing.user_id !== u) return res.status(403).json({ error: 'Forbidden' });
+  // Another account's food is a 404, like one that is not there (see PUT).
+  if (!existing || (u != null && existing.user_id !== u)) return res.status(404).json({ error: 'Not found' });
   db.prepare(`UPDATE foods SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(req.params.id);
   res.json({ ok: true });
 }));

@@ -7,6 +7,7 @@ import { INDEX_MAX_BYTES, diaryIndexEntry } from '../lib/diary-index.js';
 import { isCalendarDate } from '../lib/mcp/_util.js';
 import { INDEX_DATE_VALID, decodeCursor, encodeCursor, readKeysetPage } from '../lib/diary-keyset.js';
 import { mergeEntries } from '../lib/diary-merge.js';
+import { cleanItemNames } from '../lib/clean-text.js';
 import { dispatchWebhookEvent } from '../lib/webhooks.js';
 import { getGoalsCore } from '../lib/mcp/tools/goals.js';
 import { dailyTotalsCore } from '../lib/mcp/tools/daily-totals.js';
@@ -161,7 +162,7 @@ router.put('/:date', wrap((req, res) => {
   if (_rejectBadDate(res, req.params.date)) return;
   const receivedAt = Date.now();
   const { body_stats, water, notes } = req.body;
-  const items = _stripDataUrlImages(req.body.items);
+  const items = cleanItemNames(_stripDataUrlImages(req.body.items));
   const u = uid(req);
   const date = req.params.date;
 

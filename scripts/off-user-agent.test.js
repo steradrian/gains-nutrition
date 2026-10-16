@@ -17,7 +17,7 @@ test('the default names the app, its version and where to reach it', () => {
 });
 
 test('OFF_USER_AGENT replaces it; empty or blank means the default', () => {
-  assert.equal(offUserAgent({ OFF_USER_AGENT: 'MyGains/2.1 (me@example.com)' }), 'MyGains/2.1 (me@example.com)');
+  assert.equal(offUserAgent({ OFF_USER_AGENT: 'MyGains/2.1 (+https://github.com/you/your-gains)' }), 'MyGains/2.1 (+https://github.com/you/your-gains)');
   assert.equal(offUserAgent({ OFF_USER_AGENT: '  padded/1.0 (a@b.c)  ' }), 'padded/1.0 (a@b.c)');
   for (const v of ['', '   ', '\n', undefined, null, 42]) assert.equal(offUserAgent({ OFF_USER_AGENT: v }), DEFAULT_OFF_USER_AGENT, JSON.stringify(v));
 });

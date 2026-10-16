@@ -564,15 +564,9 @@ if (!columnExists('meals', 'source_url')) {
 if (!columnExists('meals', 'import_warnings')) {
   db.exec(`ALTER TABLE meals ADD COLUMN import_warnings TEXT`);
 }
-// Partial index so a pulled-from-CookTrace recipe can upsert by
-// (user, source, ext_id) without a scan when NT re-imports it.
-// WHERE clause keeps rows with no federation metadata out of the
-// index entirely so it stays tiny.
-db.exec(`
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_meals_source_ext
-    ON meals(user_id, source_app, source_external_id)
-    WHERE source_app IS NOT NULL AND source_external_id IS NOT NULL
-`);
+// The partial unique index that lets a pulled-from-CookTrace recipe upsert by
+// (user, source, ext_id) is idx_meals_source_ext, made below once deleted_at
+// exists on the table (the index leaves deleted rows out).
 
 // Same federation identity on foods for the CT-pantry-into-NT-foods pull.
 // Only source_external_id namespaces the row on its source (e.g.
@@ -586,11 +580,7 @@ if (!columnExists('foods', 'source_external_id')) {
 if (!columnExists('foods', 'source_url')) {
   db.exec(`ALTER TABLE foods ADD COLUMN source_url TEXT`);
 }
-db.exec(`
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_foods_source_ext
-    ON foods(user_id, source_app, source_external_id)
-    WHERE source_app IS NOT NULL AND source_external_id IS NOT NULL
-`);
+// idx_foods_source_ext, the same unique index for foods, is made below with the meals one.
 
 // ── Sync migrations (Phase 2) ──────────────────────────────────────────────
 // Add updated_at to tables that lack it (needed for differential sync)
@@ -629,6 +619,24 @@ if (!columnExists('foods', 'deleted_at')) {
 }
 if (!columnExists('meals', 'deleted_at')) {
   db.exec(`ALTER TABLE meals ADD COLUMN deleted_at TEXT DEFAULT NULL`);
+}
+// One live row per (user, source_app, source_external_id): a pulled-from-CookTrace recipe or pantry
+// food upserts by it, without a scan. A deleted row is a soft delete (deleted_at) and no longer
+// holds the stamp: the index used to count it, so saving a food or meal again with the stamp of
+// one that had been deleted found nothing live to update, tried to insert, and failed with a
+// UNIQUE error (a 500 from POST /api/foods and /api/meals, a silently dropped row in the backup
+// restore and the sync push). Rows with no federation metadata stay out of the index, so it stays
+// tiny. An index made before this one has no deleted_at in its definition: it is replaced, which
+// can never fail, since the new one allows everything the old one did.
+for (const [table, index] of [['meals', 'idx_meals_source_ext'], ['foods', 'idx_foods_source_ext']]) {
+  const made = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`).get(index);
+  if (made && /deleted_at/.test(made.sql)) continue;
+  db.exec(`DROP INDEX IF EXISTS ${index}`);
+  db.exec(`
+    CREATE UNIQUE INDEX ${index}
+      ON ${table}(user_id, source_app, source_external_id)
+      WHERE source_app IS NOT NULL AND source_external_id IS NOT NULL AND deleted_at IS NULL
+  `);
 }
 if (!columnExists('meals', 'servings')) {
   // Recipe yields. Existing migrated rows stay NULL — the editor treats NULL

@@ -8,64 +8,28 @@
  *     for a shared meal, a private one and one that is not there alike, and the
  *     meal does not change;
  *   - the names and labels in the settings lose C0 control characters on write
- *     (PUT /api/settings and /bulk), emoji and other Unicode stay, and a name
- *     made only of control characters is refused.
+ *     (PUT /api/settings and /bulk; a tab becomes a space), emoji and other
+ *     Unicode stay, and a name made only of control characters is refused.
  *
- * In-process, on a scratch database, like bridge-hardening.test.js. The
- * User-Agent is in off-user-agent.test.js and off-user-agent-proxy.test.js.
+ * In-process, on a scratch database (fixtures/in-process-server.mjs). The
+ * User-Agent is in off-user-agent.test.js and off-user-agent-proxy.test.js;
+ * the owner scope of the other routes is in owner-scope.test.js and
+ * owner-scope-single-user.test.js, the cleaning of every other write path
+ * in clean-names.test.js and clean-names-restore.test.js.
  * Skipped where better-sqlite3 is not built for this Node (it needs Node 20).
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { createRequire } from 'node:module';
 import test from 'node:test';
+import { bootInProcess } from './fixtures/in-process-server.mjs';
 
-const req = createRequire(new URL('../server/package.json', import.meta.url));
-let db = null, dir = null, auth = null, keys = null, server = null, base = null;
-try {
-  req('better-sqlite3');
-  dir = mkdtempSync(join(tmpdir(), 'nt-small-fixes-'));
-  process.env.DB_PATH = join(dir, 'test.db');
-  process.env.UPLOADS_PATH = join(dir, 'uploads');
-  process.env.JWT_SECRET = 'small-fixes-test-secret-0123456789abcdef';
-  db = (await import('../server/db.js')).default;
-  auth = await import('../server/middleware/auth.js');
-  keys = await import('../server/lib/create-keys.js');
-} catch { /* better-sqlite3 is not built for this Node: the cases skip */ }
-test.after(() => { server?.close(); try { db?.close(); } catch {} if (dir) rmSync(dir, { recursive: true, force: true }); });
-const skip = t => { if (!db) { t.skip('better-sqlite3 is not built for this Node'); return true; } return false; };
-
-async function http() {
-  if (base) return base;
-  const express = req('express');
-  const app = express();
-  app.use(express.json({ limit: '1mb' }));
-  app.use(req('cookie-parser')());
-  app.use(auth.authenticate);
-  app.use('/api/foods', (await import('../server/routes/foods.js')).default);
-  app.use('/api/meals', (await import('../server/routes/meals.js')).default);
-  app.use('/api/settings', (await import('../server/routes/settings.js')).default);
-  app.use('/api/sync', (await import('../server/routes/sync.js')).default);
-  server = app.listen(0);
-  base = `http://127.0.0.1:${server.address().port}`;
-  return base;
-}
-let seq = 0;
-const newUser = () => {
-  const id = Number(db.prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)').run(`sf-${++seq}-${Math.random()}`, 'x', 'user').lastInsertRowid);
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
-  return { ...user, token: auth.signToken(user) };
-};
-async function call(user, method, path, body) {
-  const h = { authorization: `Bearer ${user.token}` };
-  if (body !== undefined) h['content-type'] = 'application/json';
-  const res = await fetch((await http()) + path, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body) });
-  let json = null;
-  try { json = await res.json(); } catch { /* no body */ }
-  return { status: res.status, body: json };
-}
+const env = await bootInProcess({
+  prefix: 'nt-small-fixes',
+  routes: { '/api/foods': 'foods.js', '/api/meals': 'meals.js', '/api/settings': 'settings.js', '/api/sync': 'sync.js' },
+});
+const db = env?.db;
+const keys = env ? await import('../server/lib/create-keys.js') : null;
+const skip = t => { if (!env) { t.skip('better-sqlite3 is not built for this Node'); return true; } return false; };
+const { newUser, call } = env ?? {};
 
 // ── 2. A create key on a deleted row ──────────────────────────────────────
 test('findByCreateKey skips a deleted row, prefers the live one, and the sync push can ask for the deleted too', t => {
@@ -173,7 +137,7 @@ test('PUT /api/settings strips C0 control characters from names and labels and k
   const put = (key, value) => call(u, 'PUT', '/api/settings', { key, value });
 
   assert.equal((await put('mealNames', ['Break\u0000fast', 'Lun\tch\n', '\u0001Dinner\u001f', 'Snacks \u{1F36A}', 'Frühstück', '朝ごはん'])).status, 200);
-  assert.deepEqual(stored(u, 'mealNames'), ['Breakfast', 'Lunch', 'Dinner', 'Snacks \u{1F36A}', 'Frühstück', '朝ごはん']);
+  assert.deepEqual(stored(u, 'mealNames'), ['Breakfast', 'Lun ch', 'Dinner', 'Snacks \u{1F36A}', 'Frühstück', '朝ごはん']);
 
   assert.equal((await put('foodCategories', ['Dai\u0000ry', { name: 'Fr\u0007uit', label: '\u{1F34E}\u0000' }, { name: 'Veg', label: '🥦' }])).status, 200);
   assert.deepEqual(stored(u, 'foodCategories'), ['Dairy', { name: 'Fruit', label: '\u{1F34E}' }, { name: 'Veg', label: '🥦' }]);

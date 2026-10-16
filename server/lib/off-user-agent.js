@@ -5,7 +5,7 @@
  * it, in the User-Agent, so they can contact an app that misbehaves instead
  * of blocking it. The default names Gains and its repository; an operator
  * who wants OFF to reach them instead sets OFF_USER_AGENT, for example
- * `MyGains/1.0 (me@example.com)`.
+ * `MyGains/1.0 (+https://github.com/you/your-gains)`.
  *
  * It is sent on every outbound request to an OFF host (the product and
  * search lookups through /api/proxy, the images saved with a food, the

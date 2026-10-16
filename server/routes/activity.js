@@ -2,6 +2,7 @@ import { Router } from 'express';
 import db from '../db.js';
 import { wrap } from '../logger.js';
 import { requireAuth, userMgmtActive } from '../middleware/auth.js';
+import { cleanText } from '../lib/clean-text.js';
 import {
   BRIDGE_SOURCE, isIntegrationRow, sumManualActivity, wearableActivity, effectiveActiveCalories, withCoverage,
 } from '../lib/active-calories.js';
@@ -14,7 +15,7 @@ const uid = req => userMgmtActive() ? req.user.id : null;
 const ALLOWED_SOURCES = new Set(['manual_form', 'ai_estimated', 'user_stated', 'compendium']);
 
 function sanitize(body) {
-  const name = String(body?.name || '').trim().slice(0, 80);
+  const name = cleanText(String(body?.name || '')).trim().slice(0, 80);
   const kcal = Math.max(0, Math.round(Number(body?.kcal) || 0));
   const duration_min = body?.duration_min != null ? Math.max(0, Math.round(Number(body.duration_min))) : null;
   const distance = body?.distance != null ? String(body.distance).trim().slice(0, 40) || null : null;

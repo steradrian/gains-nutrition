@@ -18,10 +18,11 @@ test('the four name settings, and no other', () => {
   assert.deepEqual(clean('mealNames', null), { value: null });
 });
 
-test('every C0 character goes: U+0000 to U+001F, the whitespace ones too', () => {
+test('every C0 character goes, U+0000 to U+001F, the whitespace ones too, except a tab, which becomes a space', () => {
   const all = Array.from({ length: 32 }, (_, i) => String.fromCharCode(i)).join('');
-  assert.deepEqual(clean('mealNames', [`A${all}B`]), { value: ['AB'] });
-  assert.deepEqual(clean('mealNames', ['Tab\there', 'New\nline', 'Car\rriage']), { value: ['Tabhere', 'Newline', 'Carriage'] });
+  assert.deepEqual(clean('mealNames', [`A${all}B`]), { value: ['A B'] }, 'the one tab among them is the one space');
+  assert.deepEqual(clean('mealNames', ['Tab\there', 'New\nline', 'Car\rriage']), { value: ['Tab here', 'Newline', 'Carriage'] });
+  assert.deepEqual(clean('mealNames', ['Second\t\tbreakfast']), { value: ['Second  breakfast'] }, 'each tab is one space');
 });
 
 test('normal Unicode stays: spaces, accents, other scripts, emoji, ZWJ sequences, and DEL and C1 are not C0', () => {

@@ -3,6 +3,7 @@ import db from '../db.js';
 import { wrap } from '../logger.js';
 import { requireAuth, userMgmtActive } from '../middleware/auth.js';
 import { ensureUuids } from '../lib/diary-merge.js';
+import { cleanItemNames, cleanName, cleanText } from '../lib/clean-text.js';
 import { ADMIT, admitDiaryDay, quarantinedDate } from '../lib/diary-quarantine.js';
 
 const router = Router();
@@ -93,12 +94,12 @@ router.post('/import', wrap((req, res) => {
   const run = db.transaction(() => {
     for (const f of foodList) {
       insFood.run(
-        u, f.name || '', f.brand || null,
+        u, cleanName(f.name) || '', cleanName(f.brand) || null,
         JSON.stringify(f.nutrition || {}),
         f.portion ?? 100, f.unit || 'g',
         f.imgUrl || f.img_url || null,
         f.notes || null,
-        (f.categories && f.categories[0]) || f.category || null,
+        cleanName((f.categories && f.categories[0]) || f.category) || null,
         f.barcode || null,
         f.visibility || 'private',
         f.source_id ?? null,
@@ -112,8 +113,8 @@ router.post('/import', wrap((req, res) => {
     }
     for (const m of [...meals, ...recipes]) {
       insMeal.run(
-        u, m.name || '', JSON.stringify(m.nutrition || {}),
-        JSON.stringify(m.items || []),
+        u, cleanName(m.name) || '', JSON.stringify(m.nutrition || {}),
+        JSON.stringify(cleanItemNames(m.items || [])),
         m.imgUrl || m.img_url || null,
         m.notes || null,
         recipes.includes(m) ? 1 : 0,
@@ -137,7 +138,7 @@ router.post('/import', wrap((req, res) => {
         u, e.date,
         // #239: exports from before per-item uuids carry none; give them one
         // on the way in, or the app's first save of each day doubles it.
-        JSON.stringify(ensureUuids(e.items || [])),
+        JSON.stringify(cleanItemNames(ensureUuids(e.items || []))),
         JSON.stringify(e.bodyStats || e.body_stats || {}),
         JSON.stringify(ensureUuids(e.water || [])),
         (typeof e.notes === 'string' && e.notes.trim()) ? e.notes : null
@@ -146,7 +147,7 @@ router.post('/import', wrap((req, res) => {
     for (const a of activity) {
       if (!a.date || !a.name) continue;
       insActivity.run(
-        u, a.date, String(a.name).slice(0, 80),
+        u, a.date, cleanText(String(a.name)).slice(0, 80),
         Math.max(0, Math.round(Number(a.kcal) || 0)),
         a.duration_min != null ? Math.max(0, Math.round(Number(a.duration_min))) : null,
         a.distance != null ? String(a.distance).slice(0, 40) : null,

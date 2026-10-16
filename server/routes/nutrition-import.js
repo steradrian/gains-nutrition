@@ -21,6 +21,7 @@ import { parseCronometer }  from '../lib/nutrition-import/cronometer.js';
 import { parseLoseit }      from '../lib/nutrition-import/loseit.js';
 import { parseMfp, pickMealCsv } from '../lib/nutrition-import/mfp.js';
 import { ensureUuids } from '../lib/diary-merge.js';
+import { cleanItemNames } from '../lib/clean-text.js';
 import { ADMIT, admitDiaryDay, quarantinedDate } from '../lib/diary-quarantine.js';
 
 const router = Router();
@@ -256,7 +257,7 @@ router.post('/commit', upload.single('file'), wrap((req, res) => {
       }
 
       // #239: stored with uuids, or the app's first save of the day doubles it.
-      const itemsJson = JSON.stringify(ensureUuids(nextItems));
+      const itemsJson = JSON.stringify(cleanItemNames(ensureUuids(nextItems)));
       const bodyStats = existing ? (existing.body_stats || '{}') : '{}';
       const water     = existing ? (existing.water || '[]')      : '[]';
       const notes     = existing ? existing.notes : null;

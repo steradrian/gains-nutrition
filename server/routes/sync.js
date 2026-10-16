@@ -15,6 +15,8 @@ import { requireAuth, userMgmtActive } from '../middleware/auth.js';
 import { logger } from '../logger.js';
 import { resolveNewItemVisibility } from '../lib/default-visibility.js';
 import { isServerOnlyKey } from '../lib/server-only-keys.js';
+import { cleanItemNames, cleanName, cleanText } from '../lib/clean-text.js';
+import { cleanTextSetting } from '../lib/setting-text.js';
 import { localizeImage, isExternalUrl } from '../lib/image-localizer.js';
 import { mirrorWeightToBodyStats } from '../lib/wellness-mirror.js';
 import { cleanCreateKey, findByCreateKey, setCreateKey } from '../lib/create-keys.js';
@@ -296,8 +298,8 @@ router.post('/push', wrap(async (req, res) => {
           } else {
             db.prepare(
               `UPDATE foods SET name=?, brand=?, nutrition=?, portion=?, unit=?, img_url=?, notes=?, category=?, barcode=?, favorite=?, usage_count=MAX(usage_count, ?), last_used_at=MAX(COALESCE(last_used_at, ''), COALESCE(?, '')), nutrition_basis=?, alt_units=?, density_g_ml=?, source_app=?, source_external_id=?, source_url=?, updated_at=? WHERE id=?`
-            ).run(f.name, f.brand, JSON.stringify(f.nutrition || {}), f.portion ?? 100, f.unit || 'g',
-              f.img_url || null, f.notes || null, f.category || null, f.barcode || null,
+            ).run(cleanName(f.name), cleanName(f.brand), JSON.stringify(f.nutrition || {}), f.portion ?? 100, f.unit || 'g',
+              f.img_url || null, f.notes || null, cleanName(f.category) || null, f.barcode || null,
               f.favorite ? 1 : 0, f.usage_count || 0, f.last_used_at || null,
               // Issues #69 + #70: OFF unit metadata. Clients that don't send
               // these keys yet get null, which preserves existing behavior.
@@ -334,8 +336,8 @@ router.post('/push', wrap(async (req, res) => {
         const r = db.prepare(
           `INSERT INTO foods (user_id, name, brand, nutrition, portion, unit, img_url, notes, category, barcode, favorite, usage_count, last_used_at, nutrition_basis, alt_units, density_g_ml, source_app, source_external_id, source_url, visibility, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
-        ).run(u, f.name, f.brand || null, JSON.stringify(f.nutrition || {}), f.portion ?? 100, f.unit || 'g',
-          f.img_url || null, f.notes || null, f.category || null, f.barcode || null,
+        ).run(u, cleanName(f.name), cleanName(f.brand) || null, JSON.stringify(f.nutrition || {}), f.portion ?? 100, f.unit || 'g',
+          f.img_url || null, f.notes || null, cleanName(f.category) || null, f.barcode || null,
           f.favorite ? 1 : 0, f.usage_count || 0, f.last_used_at || null,
           f.nutrition_basis || null,
           _serializeAltUnitsForServer(f.alt_units),
@@ -363,7 +365,7 @@ router.post('/push', wrap(async (req, res) => {
           } else {
             db.prepare(
               `UPDATE meals SET name=?, nutrition=?, items=?, img_url=?, notes=?, is_recipe=?, portion=?, unit=?, servings=?, favorite=?, usage_count=MAX(usage_count, ?), last_used_at=MAX(COALESCE(last_used_at, ''), COALESCE(?, '')), updated_at=? WHERE id=?`
-            ).run(m.name, JSON.stringify(m.nutrition || {}), JSON.stringify(m.items || []),
+            ).run(cleanName(m.name), JSON.stringify(m.nutrition || {}), JSON.stringify(cleanItemNames(m.items || [])),
               m.img_url || null, m.notes || null, m.is_recipe ? 1 : 0, m.portion ?? 100, m.unit || 'g',
               m.servings != null ? Math.max(1, parseInt(m.servings) || 1) : null,
               m.favorite ? 1 : 0, m.usage_count || 0, m.last_used_at || null, stamp(m.updated_at, existing), m.server_id);
@@ -385,7 +387,7 @@ router.post('/push', wrap(async (req, res) => {
         const r = db.prepare(
           `INSERT INTO meals (user_id, name, nutrition, items, img_url, notes, is_recipe, portion, unit, servings, favorite, usage_count, last_used_at, visibility, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
-        ).run(u, m.name, JSON.stringify(m.nutrition || {}), JSON.stringify(m.items || []),
+        ).run(u, cleanName(m.name), JSON.stringify(m.nutrition || {}), JSON.stringify(cleanItemNames(m.items || [])),
           m.img_url || null, m.notes || null, m.is_recipe ? 1 : 0, m.portion ?? 100, m.unit || 'g',
           Math.max(1, parseInt(m.servings) || 1),
           m.favorite ? 1 : 0, m.usage_count || 0, m.last_used_at || null,
@@ -444,7 +446,7 @@ router.post('/push', wrap(async (req, res) => {
         const serverItems = existingRow ? JSON.parse(existingRow.items || '[]') : [];
         const serverWater = existingRow ? JSON.parse(existingRow.water || '[]') : [];
         const { merged: mergedItems, newTombstoneUuids: newItemTombstones } =
-          mergeEntries(serverItems, d.items || [], deletedItemUuids, priorItemTombstones);
+          mergeEntries(serverItems, cleanItemNames(d.items || []), deletedItemUuids, priorItemTombstones);
         const { merged: mergedWater, newTombstoneUuids: newWaterTombstones } =
           mergeEntries(serverWater, d.water || [], deletedWaterUuids, priorWaterTombstones);
 
@@ -566,7 +568,7 @@ router.post('/push', wrap(async (req, res) => {
               .run(stamp(a.updated_at, existing), keyedRow ? 1 : 0, a.server_id);
           } else {
             const next = {
-              name: a.name,
+              name: cleanName(a.name),
               kcal: Math.max(0, Math.round(Number(a.kcal) || 0)),
               duration_min: a.duration_min != null ? Math.max(0, Math.round(Number(a.duration_min))) : null,
               distance: a.distance != null ? String(a.distance).slice(0, 40) : null,
@@ -594,7 +596,7 @@ router.post('/push', wrap(async (req, res) => {
         const r = db.prepare(
           `INSERT INTO activity_log (user_id, date, name, kcal, duration_min, distance, source, met, is_template, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
-        ).run(u, a.date, String(a.name || '').slice(0, 80),
+        ).run(u, a.date, cleanText(String(a.name || '')).slice(0, 80),
           Math.max(0, Math.round(Number(a.kcal) || 0)),
           a.duration_min != null ? Math.max(0, Math.round(Number(a.duration_min))) : null,
           a.distance != null ? String(a.distance).slice(0, 40) : null,
@@ -707,7 +709,7 @@ router.post('/push', wrap(async (req, res) => {
            has_gps       = MAX(has_gps, excluded.has_gps),
            updated_at    = datetime('now')`
       ).run(workoutUid, w.source, String(w.source_id), w.date,
-        w.activity_type || null, w.activity_name || null, w.start_time || null,
+        w.activity_type || null, cleanName(w.activity_name) || null, w.start_time || null,
         w.duration_ms != null ? Math.round(Number(w.duration_ms)) : null,
         w.distance_km != null ? Number(w.distance_km) : null,
         w.calories != null ? Math.round(Number(w.calories)) : null,
@@ -731,10 +733,15 @@ router.post('/push', wrap(async (req, res) => {
           db.prepare(`UPDATE user_settings SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE user_id = ? AND key = ?`)
             .run(u, s.key);
         } else {
+          // Names and labels lose their control characters (lib/setting-text.js), as in
+          // PUT /api/settings. A name that is nothing but control characters leaves that one
+          // setting out, unanswered, like a server-only key: the push cannot ask for another.
+          const text = cleanTextSetting(s.key, s.value);
+          if (text.error) continue;
           db.prepare(
             `INSERT INTO user_settings (user_id, key, value, updated_at) VALUES (?, ?, ?, datetime('now'))
              ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = datetime('now'), deleted_at = NULL`
-          ).run(u, s.key, JSON.stringify(s.value));
+          ).run(u, s.key, JSON.stringify(text.value));
         }
         result.settings.push({ key: s.key });
       }

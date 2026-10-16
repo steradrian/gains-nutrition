@@ -15,7 +15,7 @@ import { startServer } from './fixtures/contract/server.mjs';
 import { startUpstream, OFF_PRODUCT_CODE, OFF_SEARCH_QUERY, USDA_QUERY } from './fixtures/contract/upstream.mjs';
 
 const DEFAULT = 'Gains/0.1.0 (+https://github.com/steradrian/gains)';
-const CUSTOM = 'MyGains/2.0 (me@example.com)';
+const CUSTOM = 'MyGains/2.0 (+https://github.com/you/your-gains)';
 const BROWSER = 'Mozilla/5.0 (compatible; NutriTrace/1.0)';
 
 const upstream = await startUpstream();

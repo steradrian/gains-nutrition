@@ -43,6 +43,13 @@ function _row(r) {
   };
 }
 
+// The caller's live fast with this id. Another account's is null, like one that is gone or never
+// was: a 403 for it told the caller which fast ids exist. Single-user mode has no owner to check.
+function ownFast(id, u) {
+  const fast = db.prepare('SELECT * FROM fasts WHERE id = ? AND deleted_at IS NULL').get(id);
+  return fast && (u == null || fast.user_id === u) ? fast : null;
+}
+
 // ── List recent fasts ────────────────────────────────────────────────────────
 router.get('/', wrap((req, res) => {
   const u = uid(req);
@@ -96,9 +103,8 @@ router.post('/start', wrap((req, res) => {
 router.post('/:id/end', wrap((req, res) => {
   const u = uid(req);
   const id = parseInt(req.params.id);
-  const fast = db.prepare('SELECT * FROM fasts WHERE id = ? AND deleted_at IS NULL').get(id);
+  const fast = ownFast(id, u);
   if (!fast) return res.status(404).json({ error: 'Fast not found' });
-  if (u != null && fast.user_id !== u) return res.status(403).json({ error: 'Forbidden' });
   if (fast.end_at) return res.status(400).json({ error: 'Fast is already ended' });
   const end_at = new Date().toISOString();
   db.prepare(`UPDATE fasts SET end_at = ?, updated_at = datetime('now') WHERE id = ?`).run(end_at, id);
@@ -109,9 +115,8 @@ router.post('/:id/end', wrap((req, res) => {
 router.patch('/:id', wrap((req, res) => {
   const u = uid(req);
   const id = parseInt(req.params.id);
-  const fast = db.prepare('SELECT * FROM fasts WHERE id = ? AND deleted_at IS NULL').get(id);
+  const fast = ownFast(id, u);
   if (!fast) return res.status(404).json({ error: 'Fast not found' });
-  if (u != null && fast.user_id !== u) return res.status(403).json({ error: 'Forbidden' });
 
   const updates = {};
   if (req.body?.start_at) {
@@ -140,9 +145,8 @@ router.patch('/:id', wrap((req, res) => {
 router.delete('/:id', wrap((req, res) => {
   const u = uid(req);
   const id = parseInt(req.params.id);
-  const fast = db.prepare('SELECT * FROM fasts WHERE id = ? AND deleted_at IS NULL').get(id);
+  const fast = ownFast(id, u);
   if (!fast) return res.status(404).json({ error: 'Fast not found' });
-  if (u != null && fast.user_id !== u) return res.status(403).json({ error: 'Forbidden' });
   db.prepare(`UPDATE fasts SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(id);
   res.json({ ok: true });
 }));
